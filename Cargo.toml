@@ -1,0 +1,21 @@
+[package]
+name = "krucible"
+version = "0.1.0"
+edition = "2021"
+description = "Structural code verification CLI — detect dead wiring, fake logic, and AI slop"
+license = "MIT"
+
+[[bin]]
+name = "krucible"
+path = "src/cli/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+colored = "2"
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"
