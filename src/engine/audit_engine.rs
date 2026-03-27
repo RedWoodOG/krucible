@@ -3,7 +3,7 @@ use std::path::Path;
 use std::collections::HashMap;
 use crate::scanner::file_loader;
 use crate::parser::tree_sitter as ts_parser;
-use crate::analyzers::{wiring, slop, contracts, execution, llm};
+use crate::analyzers::{wiring, slop, contracts, execution, llm, tauri};
 use crate::report::schema::AuditReport;
 
 pub struct AuditOptions {
@@ -63,6 +63,10 @@ pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
     // 5. Execution integrity: async without await, unhandled promises
     let mut exec_issues = execution::analyze(&source_files);
     report.issues.append(&mut exec_issues);
+
+    // 6. Tauri command wiring: annotation vs registration vs frontend invocation
+    let mut tauri_issues = tauri::analyze(&parsed, &source_map);
+    report.issues.append(&mut tauri_issues);
 
     // --- LLM-powered deep analysis (--deep flag) ---
     if opts.deep {

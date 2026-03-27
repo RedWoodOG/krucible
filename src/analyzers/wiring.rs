@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use crate::parser::tree_sitter::ParsedFile;
+use crate::parser::tree_sitter::{ParsedFile, FunctionKind};
 use crate::report::schema::{Issue, IssueType, Severity};
 
 /// Cross-reference all function definitions against all call sites.
@@ -39,6 +39,12 @@ pub fn analyze(files: &[ParsedFile]) -> Vec<Issue> {
 
         // Skip private-style names (single underscore prefix is intentional in Rust)
         if name.starts_with("__") {
+            continue;
+        }
+
+        // Tauri commands are invoked by the Tauri runtime, not by Rust call sites.
+        // Never flag them as dead code — that's the Tauri analyzer's job.
+        if def.kind == FunctionKind::TauriCommand {
             continue;
         }
 
