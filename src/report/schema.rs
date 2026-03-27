@@ -68,4 +68,8 @@ impl AuditReport {
     pub fn medium_count(&self) -> usize {
         self.issues.iter().filter(|i| matches!(i.severity, Severity::Medium)).count()
     }
+
+    pub fn low_count(&self) -> usize {
+        self.issues.iter().filter(|i| matches!(i.severity, Severity::Low)).count()
+    }
 }

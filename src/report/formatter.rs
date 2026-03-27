@@ -1,46 +1,110 @@
 use colored::Colorize;
-use super::schema::{AuditReport, Severity};
+use super::schema::{AuditReport, Severity, IssueType};
 
 pub fn print_human(report: &AuditReport) {
-    println!("{}", "═══════════════════════════════════════".dimmed());
-    println!("{}", "  KRUCIBLE AUDIT REPORT".bold());
-    println!("{}", "═══════════════════════════════════════".dimmed());
-    println!("  Repo:          {}", report.repo);
+    println!("{}", "═══════════════════════════════════════════════════".dimmed());
+    println!("{}", "  KRUCIBLE AUDIT REPORT".bold().white());
+    println!("{}", "═══════════════════════════════════════════════════".dimmed());
+    println!("  Repo:          {}", report.repo.cyan());
     println!("  Files scanned: {}", report.files_scanned);
     println!("  Issues found:  {}", report.issues.len());
-    println!("  {} HIGH  {} MEDIUM", 
+    println!(
+        "  {} HIGH   {} MEDIUM   {} LOW",
         report.high_count().to_string().red().bold(),
-        report.medium_count().to_string().yellow().bold()
+        report.medium_count().to_string().yellow().bold(),
+        report.low_count().to_string().blue()
     );
-    println!("{}", "═══════════════════════════════════════".dimmed());
+    println!("{}", "═══════════════════════════════════════════════════".dimmed());
     println!();
 
     if report.issues.is_empty() {
-        println!("{}", "  ✓ No issues found.".green().bold());
+        println!("{}", "  ✓ No issues found. Code looks real.".green().bold());
         return;
     }
 
-    for issue in &report.issues {
-        let severity_label = match issue.severity {
-            Severity::High => format!("[{}]", issue.severity).red().bold().to_string(),
-            Severity::Medium => format!("[{}]", issue.severity).yellow().bold().to_string(),
-            Severity::Low => format!("[{}]", issue.severity).blue().to_string(),
-            Severity::Info => format!("[{}]", issue.severity).dimmed().to_string(),
-        };
+    // Group by type for cleaner output
+    let reality_gaps: Vec<_> = report.issues.iter()
+        .filter(|i| matches!(i.issue_type, IssueType::ContractViolation | IssueType::FakeWiring))
+        .collect();
 
-        print!("{} ", severity_label);
-        println!("{}", issue.message.bold());
-        println!("    File: {}{}", issue.file, 
-            issue.line.map(|l| format!(":{l}")).unwrap_or_default()
-        );
+    let dead_code: Vec<_> = report.issues.iter()
+        .filter(|i| matches!(i.issue_type, IssueType::DeadCode))
+        .collect();
 
-        if let (Some(claim), Some(reality)) = (&issue.claim, &issue.reality) {
-            println!("    {}: {}", "CLAIM".cyan(), claim);
-            println!("    {}: {}", "REALITY".red(), reality);
+    let slop: Vec<_> = report.issues.iter()
+        .filter(|i| matches!(i.issue_type, IssueType::AiSlop))
+        .collect();
+
+    let exec: Vec<_> = report.issues.iter()
+        .filter(|i| matches!(i.issue_type, IssueType::UnresolvedAsync))
+        .collect();
+
+    // Reality Gap section — the killer feature
+    if !reality_gaps.is_empty() {
+        println!("{}", "  ◆ REALITY GAP".red().bold());
+        println!("{}", "  ─────────────────────────────────────────────────".dimmed());
+        for issue in &reality_gaps {
+            print_issue(issue);
         }
-
-        println!();
     }
+
+    if !dead_code.is_empty() {
+        println!("{}", "  ◆ DEAD CODE / FAKE WIRING".yellow().bold());
+        println!("{}", "  ─────────────────────────────────────────────────".dimmed());
+        for issue in &dead_code {
+            print_issue(issue);
+        }
+    }
+
+    if !exec.is_empty() {
+        println!("{}", "  ◆ EXECUTION PATH ISSUES".yellow().bold());
+        println!("{}", "  ─────────────────────────────────────────────────".dimmed());
+        for issue in &exec {
+            print_issue(issue);
+        }
+    }
+
+    if !slop.is_empty() {
+        println!("{}", "  ◆ AI SLOP DETECTED".yellow().bold());
+        println!("{}", "  ─────────────────────────────────────────────────".dimmed());
+        for issue in &slop {
+            print_issue(issue);
+        }
+    }
+
+    // Summary verdict
+    println!("{}", "═══════════════════════════════════════════════════".dimmed());
+    if report.high_count() > 0 {
+        println!("{}", "  ✗ VERDICT: Code has critical structural issues.".red().bold());
+    } else if report.medium_count() > 0 {
+        println!("{}", "  ⚠ VERDICT: Code has wiring issues. Review before shipping.".yellow().bold());
+    } else {
+        println!("{}", "  ✓ VERDICT: No critical issues found.".green().bold());
+    }
+    println!("{}", "═══════════════════════════════════════════════════".dimmed());
+}
+
+fn print_issue(issue: &super::schema::Issue) {
+    let severity_label = match issue.severity {
+        Severity::High   => "[HIGH]  ".red().bold().to_string(),
+        Severity::Medium => "[MED]   ".yellow().bold().to_string(),
+        Severity::Low    => "[LOW]   ".blue().to_string(),
+        Severity::Info   => "[INFO]  ".dimmed().to_string(),
+    };
+
+    println!("  {} {}", severity_label, issue.message.bold());
+    println!("           {} {}{}",
+        "→".dimmed(),
+        issue.file.dimmed(),
+        issue.line.map(|l| format!(":{l}")).unwrap_or_default().dimmed()
+    );
+
+    if let (Some(claim), Some(reality)) = (&issue.claim, &issue.reality) {
+        println!("           {} {}", "CLAIM:  ".cyan(), claim);
+        println!("           {} {}", "REALITY:".red(), reality);
+    }
+
+    println!();
 }
 
 pub fn print_json(report: &AuditReport) -> anyhow::Result<()> {

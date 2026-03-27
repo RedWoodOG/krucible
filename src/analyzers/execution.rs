@@ -1,0 +1,96 @@
+use regex::Regex;
+use crate::scanner::file_loader::SourceFile;
+use crate::report::schema::{Issue, IssueType, Severity};
+
+/// Detect execution path integrity issues:
+/// - async functions that never await
+/// - unhandled promise chains (no .catch)
+/// - fire-and-forget network calls
+pub fn analyze(files: &[SourceFile]) -> Vec<Issue> {
+    let mut issues = Vec::new();
+
+    let async_fn = Regex::new(r"async\s+function\s+(\w+)").unwrap();
+    let has_await = Regex::new(r"\bawait\b").unwrap();
+    let promise_then = Regex::new(r"\.then\(").unwrap();
+    let unhandled_net = Regex::new(r"^\s*(fetch|axios\.\w+)\(").unwrap();
+
+    for file in files {
+        let content = &file.content;
+        let file_str = file.path.display().to_string();
+
+        // 1. Async functions without await
+        for cap in async_fn.captures_iter(content) {
+            let fn_name = cap.get(1).map(|m| m.as_str()).unwrap_or("unknown");
+            let pos = cap.get(0).unwrap().start();
+            let line = content[..pos].lines().count() + 1;
+
+            // Grab next 25 lines as function body approximation
+            let snippet: String = content[pos..].lines().take(25).collect::<Vec<_>>().join("\n");
+
+            if !has_await.is_match(&snippet) {
+                issues.push(Issue {
+                    issue_type: IssueType::UnresolvedAsync,
+                    severity: Severity::Medium,
+                    file: file_str.clone(),
+                    line: Some(line),
+                    message: format!("Async function `{fn_name}` never awaits — async keyword is dead weight"),
+                    claim: Some(format!("`{fn_name}` declared async, implying async operations")),
+                    reality: Some("No await found in function body — runs synchronously anyway".into()),
+                });
+            }
+        }
+
+        // 2. .then() chains — check if .catch appears nearby
+        for cap in promise_then.find_iter(content) {
+            let pos = cap.start();
+            let line = content[..pos].lines().count() + 1;
+
+            // Look at surrounding 300 chars for .catch
+            let end = std::cmp::min(pos + 300, content.len());
+            let snippet = &content[pos..end];
+
+            if !snippet.contains(".catch(") && !snippet.contains("catch(") {
+                issues.push(Issue {
+                    issue_type: IssueType::UnresolvedAsync,
+                    severity: Severity::Medium,
+                    file: file_str.clone(),
+                    line: Some(line),
+                    message: "Promise `.then()` with no `.catch()` — rejection silently dropped".into(),
+                    claim: Some("Promise chain handles result".into()),
+                    reality: Some("No error handler — failed promise will be swallowed".into()),
+                });
+            }
+        }
+
+        // 3. Network calls not awaited and not chained
+        for (line_num, line_str) in content.lines().enumerate() {
+            if unhandled_net.is_match(line_str) {
+                let trimmed = line_str.trim();
+                // Check if the line itself starts with await or is assigned
+                let is_handled = trimmed.starts_with("await ")
+                    || trimmed.contains("= fetch(")
+                    || trimmed.contains("= axios.")
+                    || trimmed.starts_with("const ")
+                    || trimmed.starts_with("let ")
+                    || trimmed.starts_with("return ");
+
+                if !is_handled {
+                    issues.push(Issue {
+                        issue_type: IssueType::UnresolvedAsync,
+                        severity: Severity::High,
+                        file: file_str.clone(),
+                        line: Some(line_num + 1),
+                        message: "Network call result not captured — fire and forget".into(),
+                        claim: Some("Network request is initiated".into()),
+                        reality: Some("Result is never awaited or handled — response is lost".into()),
+                    });
+                }
+            }
+        }
+    }
+
+    // Deduplicate by file+line
+    issues.dedup_by(|a, b| a.file == b.file && a.line == b.line);
+
+    issues
+}
