@@ -1,15 +1,13 @@
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
-
-use krucible::scanner;
-use krucible::report;
+use krucible::engine::audit_engine;
+use krucible::report::formatter;
 
 #[derive(Parser)]
 #[command(
     name = "krucible",
     version = "0.1.0",
     about = "Structural code verification — is this code real, or just glue?",
-    long_about = None
 )]
 struct Cli {
     /// Path to the repository to audit
@@ -34,15 +32,22 @@ enum OutputFormat {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    println!("Krucible Audit v0.1.0");
-    println!("Scanning: {}", cli.path.display());
-    println!();
+    let report = audit_engine::run_audit(&cli.path)?;
 
-    let files = scanner::file_loader::load_files(&cli.path)?;
-    println!("Found {} files to analyze", files.len());
+    match cli.format {
+        OutputFormat::Human => formatter::print_human(&report),
+        OutputFormat::Json => formatter::print_json(&report)?,
+    }
 
-    for f in &files {
-        println!("  {} [{}]", f.path.display(), f.language);
+    if let Some(out_path) = cli.output {
+        let json = serde_json::to_string_pretty(&report)?;
+        std::fs::write(&out_path, json)?;
+        eprintln!("Report written to {}", out_path.display());
+    }
+
+    // Exit 1 if HIGH issues found
+    if report.high_count() > 0 {
+        std::process::exit(1);
     }
 
     Ok(())
