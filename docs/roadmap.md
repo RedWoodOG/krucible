@@ -13,6 +13,7 @@ This roadmap defines the engineering path from the current heuristic scanner to 
 
 ### Story 1.1: SARIF output mode
 - Description: Add first-class SARIF 2.1.0 output for GitHub/code scanning compatibility.
+- Status: Completed
 - Acceptance criteria:
   - CLI supports `--format sarif`.
   - SARIF includes tool metadata, rules, results, severities, file locations.
@@ -20,12 +21,14 @@ This roadmap defines the engineering path from the current heuristic scanner to 
 
 ### Story 1.2: Stable issue fingerprints
 - Description: Add deterministic fingerprints to results to support baseline/diff workflows.
+- Status: Completed
 - Acceptance criteria:
   - Each issue has stable ID hash from (rule, file, line, normalized message).
   - Same issue in repeated runs retains same fingerprint.
 
 ### Story 1.3: CI gate policy flags
 - Description: Add CLI policy controls for failing thresholds.
+- Status: Completed
 - Acceptance criteria:
   - Flags for max allowed HIGH/MEDIUM/LOW.
   - Exit codes reflect policy violations.

@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
@@ -70,7 +69,7 @@ impl IssueType {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Issue {
     pub issue_type: IssueType,
     pub severity: Severity,
@@ -83,16 +82,23 @@ pub struct Issue {
 
 impl Issue {
     pub fn fingerprint(&self) -> String {
-        let mut hasher = DefaultHasher::new();
-        self.issue_type.as_rule_id().hash(&mut hasher);
-        self.file.hash(&mut hasher);
-        self.line.unwrap_or(0).hash(&mut hasher);
-        self.message.hash(&mut hasher);
-        format!("{:016x}", hasher.finish())
+        let canonical = format!(
+            "{}|{}|{}|{}",
+            self.issue_type.as_rule_id(),
+            self.file,
+            self.line.unwrap_or(0),
+            self.message.trim()
+        );
+        let mut hash = 0xcbf29ce484222325u64;
+        for byte in canonical.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        format!("{hash:016x}")
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AuditReport {
     pub version: String,
     pub repo: String,
@@ -175,6 +181,40 @@ impl AuditReport {
                 },
                 results,
             }],
+        }
+    }
+
+    pub fn to_json_report(&self) -> JsonReport {
+        let issues = self
+            .issues
+            .iter()
+            .map(|issue| JsonIssue {
+                fingerprint: issue.fingerprint(),
+                issue_type: issue.issue_type.clone(),
+                severity: issue.severity.clone(),
+                file: issue.file.clone(),
+                line: issue.line,
+                message: issue.message.clone(),
+                claim: issue.claim.clone(),
+                reality: issue.reality.clone(),
+            })
+            .collect();
+
+        JsonReport {
+            version: self.version.clone(),
+            repo: self.repo.clone(),
+            files_scanned: self.files_scanned,
+            issues,
+        }
+    }
+
+    pub fn to_baseline_snapshot(&self) -> BaselineSnapshot {
+        let fingerprints: BTreeSet<String> = self.issues.iter().map(Issue::fingerprint).collect();
+        BaselineSnapshot {
+            version: self.version.clone(),
+            repo: self.repo.clone(),
+            files_scanned: self.files_scanned,
+            fingerprints: fingerprints.into_iter().collect(),
         }
     }
 }
@@ -285,4 +325,32 @@ pub struct SarifArtifactLocation {
 #[derive(Debug, Serialize)]
 pub struct SarifRegion {
     pub start_line: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct JsonReport {
+    pub version: String,
+    pub repo: String,
+    pub files_scanned: usize,
+    pub issues: Vec<JsonIssue>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct JsonIssue {
+    pub fingerprint: String,
+    pub issue_type: IssueType,
+    pub severity: Severity,
+    pub file: String,
+    pub line: Option<usize>,
+    pub message: String,
+    pub claim: Option<String>,
+    pub reality: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BaselineSnapshot {
+    pub version: String,
+    pub repo: String,
+    pub files_scanned: usize,
+    pub fingerprints: Vec<String>,
 }

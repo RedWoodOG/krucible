@@ -108,7 +108,7 @@ fn print_issue(issue: &super::schema::Issue) {
 }
 
 pub fn print_json(report: &AuditReport) -> anyhow::Result<()> {
-    println!("{}", serde_json::to_string_pretty(report)?);
+    println!("{}", serde_json::to_string_pretty(&report.to_json_report())?);
     Ok(())
 }
 
