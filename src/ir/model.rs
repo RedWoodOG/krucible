@@ -73,4 +73,15 @@ impl IrRepo {
     pub fn all_calls(&self) -> impl Iterator<Item = &IrCall> {
         self.files.iter().flat_map(|f| f.calls.iter())
     }
+
+    pub fn find_function(&self, file: &str, start_line: usize, name: &str) -> Option<&IrFunction> {
+        self.files
+            .iter()
+            .find(|f| f.path == file)
+            .and_then(|f| {
+                f.functions
+                    .iter()
+                    .find(|func| func.start_line == start_line && func.name == name)
+            })
+    }
 }

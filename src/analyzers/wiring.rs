@@ -1,6 +1,6 @@
-use std::collections::HashSet;
 use crate::ir::builder as ir_builder;
 use crate::ir::model::{IrRepo, IrVisibility};
+use crate::ir::symbols::{ResolutionConfidence, SymbolTable};
 use crate::parser::tree_sitter::ParsedFile;
 use crate::report::schema::{Issue, IssueType, Severity};
 
@@ -16,11 +16,9 @@ pub fn analyze(files: &[ParsedFile]) -> Vec<Issue> {
 pub fn analyze_ir(repo: &IrRepo) -> Vec<Issue> {
     let mut issues = Vec::new();
 
-    // Collect all function names defined across the entire repo
+    // Collect all function definitions across the entire repo
     let all_defs: Vec<_> = repo.all_functions().collect();
-
-    // Collect all call site names across the entire repo
-    let all_calls: HashSet<String> = repo.all_calls().map(|c| c.name.clone()).collect();
+    let symbol_table = SymbolTable::from_repo(repo);
 
     // Skip these — common entry points / lifecycle functions that are called by runtime
     let ignored = [
@@ -55,7 +53,19 @@ pub fn analyze_ir(repo: &IrRepo) -> Vec<Issue> {
             continue;
         }
 
-        if !all_calls.contains(name) {
+        let has_reference = symbol_table.has_confident_reference(
+            name,
+            &def.file,
+            def.start_line,
+            ResolutionConfidence::High,
+        ) || symbol_table.has_confident_reference(
+            name,
+            &def.file,
+            def.start_line,
+            ResolutionConfidence::Medium,
+        );
+
+        if !has_reference {
             issues.push(Issue {
                 issue_type: IssueType::DeadCode,
                 severity: Severity::Medium,

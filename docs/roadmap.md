@@ -44,6 +44,7 @@ This roadmap defines the engineering path from the current heuristic scanner to 
 
 ### Story 2.2: Cross-file symbol table
 - Description: Resolve declarations/usages across modules and files.
+- Status: In Progress (MVP resolver integrated into wiring analyzer)
 - Acceptance criteria:
   - Call sites resolve to candidate definitions with confidence scores.
   - Dead-code analyzer uses symbol resolution instead of name-only matching.
