@@ -1,10 +1,10 @@
-use std::collections::HashSet;
-use regex::Regex;
-use crate::ir::model::{IrCallKind, IrRepo};
-use crate::flow::{cfg, dataflow};
 use crate::flow::predicates::FlowPredicateSet;
-use crate::scanner::file_loader::SourceFile;
+use crate::flow::{cfg, dataflow};
+use crate::ir::model::{IrCallKind, IrRepo};
 use crate::report::schema::{Issue, IssueType, Severity};
+use crate::scanner::file_loader::SourceFile;
+use regex::Regex;
+use std::collections::HashSet;
 
 /// Detect execution path integrity issues:
 /// - async functions that never await
@@ -29,7 +29,11 @@ pub fn analyze(files: &[SourceFile], repo: &IrRepo, policies: &[FlowPredicateSet
             let line = content[..pos].lines().count() + 1;
 
             // Grab next 25 lines as function body approximation
-            let snippet: String = content[pos..].lines().take(25).collect::<Vec<_>>().join("\n");
+            let snippet: String = content[pos..]
+                .lines()
+                .take(25)
+                .collect::<Vec<_>>()
+                .join("\n");
 
             if !has_await.is_match(&snippet) {
                 issues.push(Issue {
@@ -37,9 +41,15 @@ pub fn analyze(files: &[SourceFile], repo: &IrRepo, policies: &[FlowPredicateSet
                     severity: Severity::Medium,
                     file: file_str.clone(),
                     line: Some(line),
-                    message: format!("Async function `{fn_name}` never awaits — async keyword is dead weight"),
-                    claim: Some(format!("`{fn_name}` declared async, implying async operations")),
-                    reality: Some("No await found in function body — runs synchronously anyway".into()),
+                    message: format!(
+                        "Async function `{fn_name}` never awaits — async keyword is dead weight"
+                    ),
+                    claim: Some(format!(
+                        "`{fn_name}` declared async, implying async operations"
+                    )),
+                    reality: Some(
+                        "No await found in function body — runs synchronously anyway".into(),
+                    ),
                 });
             }
         }
@@ -78,7 +88,8 @@ pub fn analyze(files: &[SourceFile], repo: &IrRepo, policies: &[FlowPredicateSet
                     severity: Severity::Medium,
                     file: file_str.clone(),
                     line: Some(line),
-                    message: "Promise `.then()` with no `.catch()` — rejection silently dropped".into(),
+                    message: "Promise `.then()` with no `.catch()` — rejection silently dropped"
+                        .into(),
                     claim: Some("Promise chain handles result".into()),
                     reality: Some("No error handler — failed promise will be swallowed".into()),
                 });
@@ -105,7 +116,9 @@ pub fn analyze(files: &[SourceFile], repo: &IrRepo, policies: &[FlowPredicateSet
                         line: Some(line_num + 1),
                         message: "Network call result not captured — fire and forget".into(),
                         claim: Some("Network request is initiated".into()),
-                        reality: Some("Result is never awaited or handled — response is lost".into()),
+                        reality: Some(
+                            "Result is never awaited or handled — response is lost".into(),
+                        ),
                     });
                 }
             }
@@ -146,14 +159,15 @@ pub fn analyze_ir(repo: &IrRepo, policies: &[FlowPredicateSet]) -> Vec<Issue> {
             .collect();
 
         for then_line in then_lines {
-            let has_nearby_catch = catch_lines.iter().any(|catch_line| {
-                let distance = if *catch_line > then_line {
-                    *catch_line - then_line
-                } else {
-                    then_line - *catch_line
-                };
-                distance <= 12
-            }) || has_dataflow_path_to_catch(&cfg_repo, &file.path, then_line, &catch_lines);
+            let has_nearby_catch =
+                catch_lines.iter().any(|catch_line| {
+                    let distance = if *catch_line > then_line {
+                        *catch_line - then_line
+                    } else {
+                        then_line - *catch_line
+                    };
+                    distance <= 12
+                }) || has_dataflow_path_to_catch(&cfg_repo, &file.path, then_line, &catch_lines);
 
             if !has_nearby_catch {
                 issues.push(Issue {
@@ -161,17 +175,22 @@ pub fn analyze_ir(repo: &IrRepo, policies: &[FlowPredicateSet]) -> Vec<Issue> {
                     severity: Severity::Medium,
                     file: file.path.clone(),
                     line: Some(then_line),
-                    message: "Promise `.then()` with no nearby `.catch()` — rejection may be dropped".into(),
+                    message:
+                        "Promise `.then()` with no nearby `.catch()` — rejection may be dropped"
+                            .into(),
                     claim: Some("Promise chain handles result".into()),
-                    reality: Some("No nearby `.catch()` call detected in structural call graph".into()),
+                    reality: Some(
+                        "No nearby `.catch()` call detected in structural call graph".into(),
+                    ),
                 });
             }
         }
     }
 
     // Sensitive sink guard checks: detect paths to risky sinks without
-    // validation/authorization guard calls in the same function flow.
+    // validation/authorization guard calls across bounded call flow.
     // Policy sets may come from defaults or external model files.
+    const MAX_INTERPROCEDURAL_DEPTH: usize = 2;
     for function_cfg in &cfg_repo.functions {
         if !policies
             .iter()
@@ -179,18 +198,19 @@ pub fn analyze_ir(repo: &IrRepo, policies: &[FlowPredicateSet]) -> Vec<Issue> {
         {
             continue;
         }
-        let graph = dataflow::DataflowGraph::new(function_cfg);
         let mut unguarded_sinks = Vec::new();
         let mut seen = HashSet::new();
         for policy in policies {
-            let source_names: Vec<&str> = policy
-                .source_names
-                .iter()
-                .map(|s| s.as_str())
-                .collect();
-            let hits = graph.sinks_reachable_without_guards_by_profile(&source_names, policy);
+            let source_names: Vec<&str> = policy.source_names.iter().map(|s| s.as_str()).collect();
+            let hits = dataflow::sinks_reachable_without_guards_interprocedural(
+                &cfg_repo,
+                function_cfg,
+                &source_names,
+                policy,
+                MAX_INTERPROCEDURAL_DEPTH,
+            );
             for hit in hits {
-                let key = (hit.sink_name.clone(), hit.sink_line);
+                let key = (hit.sink_file.clone(), hit.sink_name.clone(), hit.sink_line);
                 if seen.insert(key) {
                     unguarded_sinks.push(hit);
                 }
@@ -198,21 +218,26 @@ pub fn analyze_ir(repo: &IrRepo, policies: &[FlowPredicateSet]) -> Vec<Issue> {
         }
 
         for hit in unguarded_sinks {
+            let location_hint = if hit.sink_function != function_cfg.function_name {
+                format!(" via `{}`", hit.sink_function)
+            } else {
+                String::new()
+            };
             issues.push(Issue {
                 issue_type: IssueType::ContractViolation,
                 severity: Severity::Medium,
-                file: function_cfg.file.clone(),
+                file: hit.sink_file.clone(),
                 line: hit.sink_line.or(Some(function_cfg.start_line)),
                 message: format!(
-                    "Sensitive sink `{}` reachable without guard in `{}`",
-                    hit.sink_name, function_cfg.function_name
+                    "Sensitive sink `{}` reachable from `{}` without guard{}",
+                    hit.sink_name, function_cfg.function_name, location_hint
                 ),
                 claim: Some(format!(
                     "`{}` appears security-sensitive and should enforce validation/authorization before sink calls",
                     function_cfg.function_name
                 )),
                 reality: Some(
-                    "A sink is reachable from function entry without encountering guard calls (validate/verify/authorize/etc.)".into(),
+                    "A sink is reachable from function entry without encountering guard/sanitizer calls across bounded call flow".into(),
                 ),
             });
         }
@@ -245,7 +270,10 @@ fn has_dataflow_path_to_catch(
         let reachable = graph.forward_reachable_from(&[then_node.id]);
         let reaches_catch = function_cfg.nodes.iter().any(|node| {
             reachable.contains(&node.id)
-                && node.line.map(|line| catch_set.contains(&line)).unwrap_or(false)
+                && node
+                    .line
+                    .map(|line| catch_set.contains(&line))
+                    .unwrap_or(false)
                 && matches!(&node.kind, cfg::CfgNodeKind::Call { name } if name == "catch")
         });
         if reaches_catch {

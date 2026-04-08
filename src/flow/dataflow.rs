@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use super::cfg::{CfgRepo, CfgNode, CfgNodeKind, FunctionCfg, NodeId};
+use super::cfg::{CfgNode, CfgNodeKind, CfgRepo, FunctionCfg, NodeId};
 use super::predicates::FlowPredicateSet;
 
 #[derive(Debug, Clone)]
@@ -103,15 +103,17 @@ impl<'a> DataflowGraph<'a> {
                 .map(|n| n.id)
                 .collect()
         } else {
-            let source_set: HashSet<&str> = source_names.iter().copied().collect();
             self.cfg
                 .nodes
                 .iter()
-                .filter(|n| {
-                    matches!(
-                        &n.kind,
-                        CfgNodeKind::Call { name } if source_set.contains(name.as_str())
-                    )
+                .filter(|n| match &n.kind {
+                    CfgNodeKind::Call { name } => {
+                        source_names.iter().any(|source| {
+                            let source = source.to_lowercase();
+                            name.to_lowercase().contains(source.as_str())
+                        }) || profile.is_source(name)
+                    }
+                    _ => false,
                 })
                 .map(|n| n.id)
                 .collect()
@@ -286,18 +288,186 @@ pub struct GuardedSinkHit {
     pub sink_line: Option<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterproceduralGuardedSinkHit {
+    pub sink_name: String,
+    pub sink_line: Option<usize>,
+    pub sink_file: String,
+    pub sink_function: String,
+    pub call_depth: usize,
+}
+
 pub fn build_dataflow_graphs(cfg_repo: &CfgRepo) -> Vec<DataflowGraph<'_>> {
     cfg_repo.functions.iter().map(DataflowGraph::new).collect()
+}
+
+pub fn sinks_reachable_without_guards_interprocedural(
+    cfg_repo: &CfgRepo,
+    start_function: &FunctionCfg,
+    source_names: &[&str],
+    profile: &FlowPredicateSet,
+    max_call_depth: usize,
+) -> Vec<InterproceduralGuardedSinkHit> {
+    let Some(start_idx) = cfg_repo.functions.iter().position(|function| {
+        function.file == start_function.file
+            && function.function_name == start_function.function_name
+            && function.start_line == start_function.start_line
+    }) else {
+        return Vec::new();
+    };
+
+    let function_by_name: HashMap<String, Vec<usize>> =
+        cfg_repo
+            .functions
+            .iter()
+            .enumerate()
+            .fold(HashMap::new(), |mut acc, (idx, function)| {
+                acc.entry(function.function_name.clone())
+                    .or_default()
+                    .push(idx);
+                acc
+            });
+
+    let successors: Vec<HashMap<NodeId, Vec<NodeId>>> = cfg_repo
+        .functions
+        .iter()
+        .map(|function| {
+            function.edges.iter().fold(HashMap::new(), |mut acc, edge| {
+                acc.entry(edge.from).or_default().push(edge.to);
+                acc
+            })
+        })
+        .collect();
+
+    let start_nodes: Vec<NodeId> = if source_names.is_empty() {
+        cfg_repo.functions[start_idx]
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, CfgNodeKind::Entry))
+            .map(|n| n.id)
+            .collect()
+    } else {
+        cfg_repo.functions[start_idx]
+            .nodes
+            .iter()
+            .filter(|n| match &n.kind {
+                CfgNodeKind::Call { name } => {
+                    source_names.iter().any(|source| {
+                        let source = source.to_lowercase();
+                        name.to_lowercase().contains(source.as_str())
+                    }) || profile.is_source(name)
+                }
+                _ => false,
+            })
+            .map(|n| n.id)
+            .collect()
+    };
+
+    if start_nodes.is_empty() {
+        return Vec::new();
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    struct TraversalState {
+        function_idx: usize,
+        node_id: NodeId,
+        depth: usize,
+    }
+
+    let mut queue: VecDeque<TraversalState> = start_nodes
+        .into_iter()
+        .map(|node_id| TraversalState {
+            function_idx: start_idx,
+            node_id,
+            depth: 0,
+        })
+        .collect();
+    let mut visited: HashSet<TraversalState> = HashSet::new();
+    let mut hits = Vec::new();
+    let mut seen_sinks: HashSet<(usize, NodeId)> = HashSet::new();
+
+    while let Some(state) = queue.pop_front() {
+        if !visited.insert(state) {
+            continue;
+        }
+
+        let function = &cfg_repo.functions[state.function_idx];
+        let Some(node) = function.nodes.iter().find(|n| n.id == state.node_id) else {
+            continue;
+        };
+
+        if let CfgNodeKind::Call { name } = &node.kind {
+            if profile.is_guard(name) {
+                continue;
+            }
+
+            if profile.is_sink(name) && seen_sinks.insert((state.function_idx, state.node_id)) {
+                hits.push(InterproceduralGuardedSinkHit {
+                    sink_name: name.clone(),
+                    sink_line: node.line,
+                    sink_file: function.file.clone(),
+                    sink_function: function.function_name.clone(),
+                    call_depth: state.depth,
+                });
+            }
+
+            if state.depth < max_call_depth {
+                if let Some(callees) = function_by_name.get(name) {
+                    for callee_idx in callees {
+                        if let Some(entry_node) = cfg_repo.functions[*callee_idx]
+                            .nodes
+                            .iter()
+                            .find(|n| matches!(n.kind, CfgNodeKind::Entry))
+                        {
+                            queue.push_back(TraversalState {
+                                function_idx: *callee_idx,
+                                node_id: entry_node.id,
+                                depth: state.depth + 1,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(next_nodes) = successors[state.function_idx].get(&state.node_id) {
+            for next in next_nodes {
+                let blocked = cfg_repo.functions[state.function_idx]
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == *next)
+                    .and_then(|n| {
+                        if let CfgNodeKind::Call { name } = &n.kind {
+                            Some(profile.is_guard(name))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(false);
+                if blocked {
+                    continue;
+                }
+                queue.push_back(TraversalState {
+                    function_idx: state.function_idx,
+                    node_id: *next,
+                    depth: state.depth,
+                });
+            }
+        }
+    }
+
+    hits
 }
 
 #[cfg(test)]
 mod tests {
     use crate::flow::cfg::build_cfg_repo;
+    use crate::flow::predicates::FlowPredicateSet;
     use crate::ir::model::{
         IrCall, IrCallKind, IrFile, IrFunction, IrLanguage, IrRepo, IrVisibility,
     };
 
-    use super::DataflowGraph;
+    use super::{sinks_reachable_without_guards_interprocedural, DataflowGraph};
 
     fn sample_cfg() -> crate::flow::cfg::FunctionCfg {
         let repo = IrRepo {
@@ -406,6 +576,121 @@ mod tests {
         let cfg = build_cfg_repo(&repo).functions.into_iter().next().unwrap();
         let df = DataflowGraph::new(&cfg);
         let hits = df.sinks_reachable_without_guards(&["input"], &["execute"], &["validate"]);
+        assert!(hits.is_empty());
+    }
+
+    fn interprocedural_repo(include_guard_in_callee: bool) -> IrRepo {
+        let mut calls = vec![
+            IrCall {
+                name: "persistOrder".into(),
+                file: "x.ts".into(),
+                line: 5,
+                kind: IrCallKind::Other,
+            },
+            IrCall {
+                name: "execute".into(),
+                file: "x.ts".into(),
+                line: 35,
+                kind: IrCallKind::Persistence,
+            },
+        ];
+        if include_guard_in_callee {
+            calls.push(IrCall {
+                name: "validate".into(),
+                file: "x.ts".into(),
+                line: 34,
+                kind: IrCallKind::Auth,
+            });
+        }
+
+        IrRepo {
+            files: vec![IrFile {
+                path: "x.ts".into(),
+                language: IrLanguage::TypeScript,
+                functions: vec![
+                    IrFunction {
+                        name: "adminCheckout".into(),
+                        file: "x.ts".into(),
+                        start_line: 1,
+                        end_line: 20,
+                        visibility: IrVisibility::Private,
+                        is_async: true,
+                        is_action_like: true,
+                        attributes: vec![],
+                    },
+                    IrFunction {
+                        name: "persistOrder".into(),
+                        file: "x.ts".into(),
+                        start_line: 30,
+                        end_line: 40,
+                        visibility: IrVisibility::Private,
+                        is_async: true,
+                        is_action_like: true,
+                        attributes: vec![],
+                    },
+                ],
+                calls,
+                imports: vec![],
+            }],
+        }
+    }
+
+    #[test]
+    fn interprocedural_query_reaches_sink_in_callee() {
+        let repo = interprocedural_repo(false);
+        let cfg_repo = build_cfg_repo(&repo);
+        let start = cfg_repo
+            .functions
+            .iter()
+            .find(|f| f.function_name == "adminCheckout")
+            .expect("start function should exist");
+        let hits = sinks_reachable_without_guards_interprocedural(
+            &cfg_repo,
+            start,
+            &[],
+            &FlowPredicateSet::generic_security(),
+            2,
+        );
+        assert!(hits
+            .iter()
+            .any(|h| h.sink_name == "execute" && h.sink_function == "persistOrder"));
+    }
+
+    #[test]
+    fn interprocedural_query_respects_call_depth_limit() {
+        let repo = interprocedural_repo(false);
+        let cfg_repo = build_cfg_repo(&repo);
+        let start = cfg_repo
+            .functions
+            .iter()
+            .find(|f| f.function_name == "adminCheckout")
+            .expect("start function should exist");
+        let hits = sinks_reachable_without_guards_interprocedural(
+            &cfg_repo,
+            start,
+            &[],
+            &FlowPredicateSet::generic_security(),
+            0,
+        );
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn interprocedural_query_stops_on_callee_guard() {
+        let repo = interprocedural_repo(true);
+        let cfg_repo = build_cfg_repo(&repo);
+        let start = cfg_repo
+            .functions
+            .iter()
+            .find(|f| f.function_name == "adminCheckout")
+            .expect("start function should exist");
+        let hits = sinks_reachable_without_guards_interprocedural(
+            &cfg_repo,
+            start,
+            &[],
+            &FlowPredicateSet::generic_security(),
+            2,
+        );
         assert!(hits.is_empty());
     }
 }
