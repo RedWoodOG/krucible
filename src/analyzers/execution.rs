@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use regex::Regex;
 use crate::ir::model::{IrCallKind, IrRepo};
-use crate::flow::{cfg, dataflow};
+use crate::flow::{cfg, dataflow, predicates};
 use crate::scanner::file_loader::SourceFile;
 use crate::report::schema::{Issue, IssueType, Severity};
 
@@ -170,37 +170,29 @@ pub fn analyze_ir(repo: &IrRepo) -> Vec<Issue> {
 
     // Sensitive sink guard checks: detect paths to risky sinks without
     // validation/authorization guard calls in the same function flow.
+    // Use layered predicate sets so frameworks can evolve independently.
+    let generic_policy = predicates::generic_security();
+    let web_policy = predicates::web_api();
+    let source_names = Vec::<&str>::new();
     for function_cfg in &cfg_repo.functions {
-        if !is_sensitive_function_name(&function_cfg.function_name) {
+        if !generic_policy.is_sensitive_function(&function_cfg.function_name)
+            && !web_policy.is_sensitive_function(&function_cfg.function_name)
+        {
             continue;
         }
         let graph = dataflow::DataflowGraph::new(function_cfg);
-        let unguarded_sinks = graph.sinks_reachable_without_guards(
-            &[],
-            &[
-                "execute",
-                "query",
-                "delete",
-                "update",
-                "insert",
-                "save",
-                "fetch",
-                "request",
-                "post",
-                "put",
-                "patch",
-                "invoke",
-            ],
-            &[
-                "validate",
-                "verify",
-                "authorize",
-                "authenticate",
-                "check_permission",
-                "guard",
-                "sanitize",
-            ],
-        );
+        let policy_refs = [&generic_policy, &web_policy];
+        let mut unguarded_sinks = Vec::new();
+        let mut seen = HashSet::new();
+        for policy in policy_refs {
+            let hits = graph.sinks_reachable_without_guards_by_profile(&source_names, policy);
+            for hit in hits {
+                let key = (hit.sink_name.clone(), hit.sink_line);
+                if seen.insert(key) {
+                    unguarded_sinks.push(hit);
+                }
+            }
+        }
 
         for hit in unguarded_sinks {
             issues.push(Issue {
@@ -224,23 +216,6 @@ pub fn analyze_ir(repo: &IrRepo) -> Vec<Issue> {
     }
 
     issues
-}
-
-fn is_sensitive_function_name(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    [
-        "auth",
-        "login",
-        "permission",
-        "token",
-        "delete",
-        "update",
-        "charge",
-        "payment",
-        "admin",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
 }
 
 fn has_dataflow_path_to_catch(

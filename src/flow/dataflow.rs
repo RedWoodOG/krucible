@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::cfg::{CfgRepo, CfgNode, CfgNodeKind, FunctionCfg, NodeId};
+use super::predicates::FlowPredicateSet;
 
 #[derive(Debug, Clone)]
 pub struct DataflowGraph<'a> {
@@ -89,6 +90,86 @@ impl<'a> DataflowGraph<'a> {
                 matches!(
                     &n.kind,
                     CfgNodeKind::Call { name } if guard_set.contains(name.as_str())
+                )
+            })
+            .map(|n| n.id)
+            .collect();
+
+        let source_nodes: Vec<NodeId> = if source_names.is_empty() {
+            self.cfg
+                .nodes
+                .iter()
+                .filter(|n| matches!(n.kind, CfgNodeKind::Entry))
+                .map(|n| n.id)
+                .collect()
+        } else {
+            let source_set: HashSet<&str> = source_names.iter().copied().collect();
+            self.cfg
+                .nodes
+                .iter()
+                .filter(|n| {
+                    matches!(
+                        &n.kind,
+                        CfgNodeKind::Call { name } if source_set.contains(name.as_str())
+                    )
+                })
+                .map(|n| n.id)
+                .collect()
+        };
+
+        let mut hits = Vec::new();
+        let mut seen_sink_nodes: HashSet<NodeId> = HashSet::new();
+        for source in source_nodes {
+            let reachable = self.reachable_skipping_guards(source, &guard_nodes);
+            for sink in &sink_nodes {
+                if !reachable.contains(sink) || !seen_sink_nodes.insert(*sink) {
+                    continue;
+                }
+                if let Some(node) = self.node_by_id(*sink) {
+                    if let CfgNodeKind::Call { name } = &node.kind {
+                        hits.push(GuardedSinkHit {
+                            sink_name: name.clone(),
+                            sink_line: node.line,
+                        });
+                    }
+                }
+            }
+        }
+
+        hits
+    }
+
+    /// Profile-driven variant of guarded-sink detection.
+    /// Predicate matching is delegated to `FlowPredicateSet`.
+    pub fn sinks_reachable_without_guards_by_profile(
+        &self,
+        source_names: &[&str],
+        profile: &FlowPredicateSet,
+    ) -> Vec<GuardedSinkHit> {
+        let sink_nodes: HashSet<NodeId> = self
+            .cfg
+            .nodes
+            .iter()
+            .filter(|n| {
+                matches!(
+                    &n.kind,
+                    CfgNodeKind::Call { name } if profile.is_sink(name)
+                )
+            })
+            .map(|n| n.id)
+            .collect();
+        if sink_nodes.is_empty() {
+            return Vec::new();
+        }
+
+        let guard_nodes: HashSet<NodeId> = self
+            .cfg
+            .nodes
+            .iter()
+            .filter(|n| {
+                matches!(
+                    &n.kind,
+                    CfgNodeKind::Call { name } if profile.is_guard(name)
                 )
             })
             .map(|n| n.id)
