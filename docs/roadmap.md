@@ -60,6 +60,7 @@ This roadmap defines the engineering path from the current heuristic scanner to 
 
 ### Story 3.1: Function-level CFG
 - Description: Build control-flow graphs for supported languages.
+- Status: In Progress (function-level CFG scaffold + unit tests implemented; branch/loop/error edges pending)
 - Acceptance criteria:
   - CFG includes branches, loops, returns, and error paths.
   - Unit tests cover representative syntax patterns.

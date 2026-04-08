@@ -47,6 +47,11 @@ pub fn analyze_ir(repo: &IrRepo) -> Vec<Issue> {
             continue;
         }
 
+        // Rust #[test] functions are framework entry points and not called directly.
+        if def.attributes.iter().any(|attr| attr.contains("test")) {
+            continue;
+        }
+
         // Public functions may be entry points for external callers/framework runtime.
         // Tauri commands are invoked by runtime, not Rust call sites.
         if matches!(def.visibility, IrVisibility::Public | IrVisibility::RuntimeExposed) {
