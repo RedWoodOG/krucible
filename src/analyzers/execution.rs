@@ -43,6 +43,25 @@ pub fn analyze(files: &[SourceFile]) -> Vec<Issue> {
         // 2. .then() chains — check if .catch appears nearby
         for cap in promise_then.find_iter(content) {
             let pos = cap.start();
+            let line_start = content[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let line_end = content[pos..]
+                .find('\n')
+                .map(|i| pos + i)
+                .unwrap_or(content.len());
+            let line_text = content[line_start..line_end].trim();
+
+            // Ignore comments and detector-internal regex declarations/usages.
+            if line_text.starts_with("//")
+                || line_text.contains("Regex::new(")
+                || line_text.contains("promise_then")
+            {
+                continue;
+            }
+
+            // Ignore escaped `.then(` patterns (e.g. regex literals like r"\.then\(").
+            if pos > 0 && content.as_bytes()[pos - 1] == b'\\' {
+                continue;
+            }
             let line = content[..pos].lines().count() + 1;
 
             // Look at surrounding 300 chars for .catch

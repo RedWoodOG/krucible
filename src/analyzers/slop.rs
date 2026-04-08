@@ -57,6 +57,10 @@ pub fn analyze(files: &[SourceFile]) -> Vec<Issue> {
 
     for file in files {
         for (line_num, line) in file.content.lines().enumerate() {
+            // Avoid matching the detector's own regex pattern declarations.
+            if line.contains("pattern: r\"") || line.contains("Regex::new(r\"") {
+                continue;
+            }
             for (re, severity, msg) in &compiled {
                 if re.is_match(line) {
                     issues.push(Issue {

@@ -297,6 +297,26 @@ fn extract_calls_recursive(node: Node, content: &[u8], file: &str, acc: &mut Vec
             }
         }
     }
+    // Rust macro invocations (e.g. format!, println!, json!) are also executable call-like sites.
+    // Treating them as calls reduces false "empty stub" findings in Rust functions.
+    else if node.kind() == "macro_invocation" {
+        let text = node_text(node, content);
+        if let Some(raw) = text.split('!').next() {
+            let name = raw
+                .split("::")
+                .last()
+                .unwrap_or(raw)
+                .trim()
+                .to_string();
+            if !name.is_empty() {
+                acc.push(CallSite {
+                    name,
+                    file: file.to_string(),
+                    line: node_line(node),
+                });
+            }
+        }
+    }
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
