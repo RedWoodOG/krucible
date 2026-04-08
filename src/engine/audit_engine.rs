@@ -6,15 +6,10 @@ use crate::parser::tree_sitter as ts_parser;
 use crate::analyzers::{wiring, slop, contracts, execution, llm, tauri};
 use crate::report::schema::AuditReport;
 
+#[derive(Default)]
 pub struct AuditOptions {
     /// Enable LLM-powered deep analysis (requires LiteLLM proxy on localhost:4000)
     pub deep: bool,
-}
-
-impl Default for AuditOptions {
-    fn default() -> Self {
-        Self { deep: false }
-    }
 }
 
 pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
