@@ -1,6 +1,7 @@
 use crate::flow::predicates::FlowPredicateSet;
 use crate::flow::{cfg, dataflow};
 use crate::ir::model::{IrCallKind, IrRepo};
+use crate::ir::symbols::{ResolutionConfidence, SymbolTable};
 use crate::report::schema::{Issue, IssueType, Severity};
 use crate::scanner::file_loader::SourceFile;
 use regex::Regex;
@@ -142,6 +143,12 @@ pub fn analyze(files: &[SourceFile], repo: &IrRepo, policies: &[FlowPredicateSet
 pub fn analyze_ir(repo: &IrRepo, policies: &[FlowPredicateSet]) -> Vec<Issue> {
     let mut issues = Vec::new();
     let cfg_repo = cfg::build_cfg_repo(repo);
+    let symbol_table = SymbolTable::from_repo(repo);
+    let call_target_index = dataflow::CallTargetIndex::from_symbol_table(
+        &cfg_repo,
+        &symbol_table,
+        ResolutionConfidence::Medium,
+    );
 
     for file in &repo.files {
         // Promise then/catch structural check per file.
@@ -208,6 +215,7 @@ pub fn analyze_ir(repo: &IrRepo, policies: &[FlowPredicateSet]) -> Vec<Issue> {
                 &source_names,
                 policy,
                 MAX_INTERPROCEDURAL_DEPTH,
+                Some(&call_target_index),
             );
             for hit in hits {
                 let key = (hit.sink_file.clone(), hit.sink_name.clone(), hit.sink_line);

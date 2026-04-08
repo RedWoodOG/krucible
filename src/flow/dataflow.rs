@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::cfg::{CfgNode, CfgNodeKind, CfgRepo, FunctionCfg, NodeId};
 use super::predicates::FlowPredicateSet;
+use crate::ir::symbols::{ResolutionConfidence, SymbolTable};
 
 #[derive(Debug, Clone)]
 pub struct DataflowGraph<'a> {
@@ -299,6 +300,56 @@ pub struct InterproceduralGuardedSinkHit {
     pub call_depth: usize,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct CallTargetIndex {
+    by_call_site: HashMap<(String, usize), Vec<usize>>,
+}
+
+impl CallTargetIndex {
+    pub fn from_symbol_table(
+        cfg_repo: &CfgRepo,
+        symbols: &SymbolTable,
+        min_confidence: ResolutionConfidence,
+    ) -> Self {
+        let function_idx_by_location: HashMap<(String, usize), usize> = cfg_repo
+            .functions
+            .iter()
+            .enumerate()
+            .map(|(idx, function)| ((function.file.clone(), function.start_line), idx))
+            .collect();
+
+        let mut by_call_site: HashMap<(String, usize), Vec<usize>> = HashMap::new();
+        for resolved in symbols
+            .resolved_calls()
+            .iter()
+            .filter(|resolved| resolved.confidence >= min_confidence)
+        {
+            let Some(target_idx) = function_idx_by_location
+                .get(&(resolved.target_file.clone(), resolved.target_line))
+            else {
+                continue;
+            };
+            by_call_site
+                .entry((resolved.call_file.clone(), resolved.call_line))
+                .or_default()
+                .push(*target_idx);
+        }
+
+        for targets in by_call_site.values_mut() {
+            targets.sort_unstable();
+            targets.dedup();
+        }
+
+        Self { by_call_site }
+    }
+
+    pub fn targets_for_callsite(&self, call_file: &str, call_line: usize) -> Option<&[usize]> {
+        self.by_call_site
+            .get(&(call_file.to_string(), call_line))
+            .map(Vec::as_slice)
+    }
+}
+
 pub fn build_dataflow_graphs(cfg_repo: &CfgRepo) -> Vec<DataflowGraph<'_>> {
     cfg_repo.functions.iter().map(DataflowGraph::new).collect()
 }
@@ -309,6 +360,7 @@ pub fn sinks_reachable_without_guards_interprocedural(
     source_names: &[&str],
     profile: &FlowPredicateSet,
     max_call_depth: usize,
+    call_targets: Option<&CallTargetIndex>,
 ) -> Vec<InterproceduralGuardedSinkHit> {
     let Some(start_idx) = cfg_repo.functions.iter().position(|function| {
         function.file == start_function.file
@@ -318,17 +370,16 @@ pub fn sinks_reachable_without_guards_interprocedural(
         return Vec::new();
     };
 
-    let function_by_name: HashMap<String, Vec<usize>> =
-        cfg_repo
-            .functions
-            .iter()
-            .enumerate()
-            .fold(HashMap::new(), |mut acc, (idx, function)| {
-                acc.entry(function.function_name.clone())
-                    .or_default()
-                    .push(idx);
-                acc
-            });
+    let function_by_name: HashMap<String, Vec<usize>> = cfg_repo
+        .functions
+        .iter()
+        .enumerate()
+        .fold(HashMap::new(), |mut acc, (idx, function)| {
+            acc.entry(function.function_name.clone())
+                .or_default()
+                .push(idx);
+            acc
+        });
 
     let successors: Vec<HashMap<NodeId, Vec<NodeId>>> = cfg_repo
         .functions
@@ -415,19 +466,34 @@ pub fn sinks_reachable_without_guards_interprocedural(
             }
 
             if state.depth < max_call_depth {
-                if let Some(callees) = function_by_name.get(name) {
-                    for callee_idx in callees {
-                        if let Some(entry_node) = cfg_repo.functions[*callee_idx]
-                            .nodes
-                            .iter()
-                            .find(|n| matches!(n.kind, CfgNodeKind::Entry))
-                        {
-                            queue.push_back(TraversalState {
-                                function_idx: *callee_idx,
-                                node_id: entry_node.id,
-                                depth: state.depth + 1,
-                            });
-                        }
+                let resolved_callees: Vec<usize> = if let (Some(index), Some(call_line)) =
+                    (call_targets, node.line)
+                {
+                    index
+                        .targets_for_callsite(function.file.as_str(), call_line)
+                        .map(|targets| targets.to_vec())
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+
+                let callee_indices: Vec<usize> = if call_targets.is_some() {
+                    resolved_callees
+                } else {
+                    function_by_name.get(name).cloned().unwrap_or_default()
+                };
+
+                for callee_idx in callee_indices {
+                    if let Some(entry_node) = cfg_repo.functions[callee_idx]
+                        .nodes
+                        .iter()
+                        .find(|n| matches!(n.kind, CfgNodeKind::Entry))
+                    {
+                        queue.push_back(TraversalState {
+                            function_idx: callee_idx,
+                            node_id: entry_node.id,
+                            depth: state.depth + 1,
+                        });
                     }
                 }
             }
@@ -469,8 +535,9 @@ mod tests {
     use crate::ir::model::{
         IrCall, IrCallKind, IrFile, IrFunction, IrLanguage, IrRepo, IrVisibility,
     };
+    use crate::ir::symbols::{ResolutionConfidence, SymbolTable};
 
-    use super::{sinks_reachable_without_guards_interprocedural, DataflowGraph};
+    use super::{sinks_reachable_without_guards_interprocedural, CallTargetIndex, DataflowGraph};
 
     fn sample_cfg() -> crate::flow::cfg::FunctionCfg {
         let repo = IrRepo {
@@ -653,6 +720,7 @@ mod tests {
             &[],
             &FlowPredicateSet::generic_security(),
             2,
+            None,
         );
         assert!(hits
             .iter()
@@ -674,6 +742,7 @@ mod tests {
             &[],
             &FlowPredicateSet::generic_security(),
             0,
+            None,
         );
         assert!(hits.is_empty());
     }
@@ -693,6 +762,109 @@ mod tests {
             &[],
             &FlowPredicateSet::generic_security(),
             2,
+            None,
+        );
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn interprocedural_query_uses_symbol_targets_to_reduce_ambiguity() {
+        let repo = IrRepo {
+            files: vec![
+                IrFile {
+                    path: "entry.ts".into(),
+                    language: IrLanguage::TypeScript,
+                    functions: vec![IrFunction {
+                        name: "adminCheckout".into(),
+                        file: "entry.ts".into(),
+                        start_line: 1,
+                        end_line: 20,
+                        visibility: IrVisibility::Private,
+                        is_async: true,
+                        is_action_like: true,
+                        attributes: vec![],
+                    }],
+                    calls: vec![IrCall {
+                        name: "persistOrder".into(),
+                        file: "entry.ts".into(),
+                        line: 5,
+                        kind: IrCallKind::Other,
+                    }],
+                    imports: vec![],
+                },
+                IrFile {
+                    path: "trusted.ts".into(),
+                    language: IrLanguage::TypeScript,
+                    functions: vec![IrFunction {
+                        name: "persistOrder".into(),
+                        file: "trusted.ts".into(),
+                        start_line: 30,
+                        end_line: 40,
+                        visibility: IrVisibility::Public,
+                        is_async: true,
+                        is_action_like: true,
+                        attributes: vec![],
+                    }],
+                    calls: vec![
+                        IrCall {
+                            name: "validate".into(),
+                            file: "trusted.ts".into(),
+                            line: 31,
+                            kind: IrCallKind::Auth,
+                        },
+                        IrCall {
+                            name: "execute".into(),
+                            file: "trusted.ts".into(),
+                            line: 33,
+                            kind: IrCallKind::Persistence,
+                        },
+                    ],
+                    imports: vec![],
+                },
+                IrFile {
+                    path: "legacy.ts".into(),
+                    language: IrLanguage::TypeScript,
+                    functions: vec![IrFunction {
+                        name: "persistOrder".into(),
+                        file: "legacy.ts".into(),
+                        start_line: 50,
+                        end_line: 60,
+                        visibility: IrVisibility::Private,
+                        is_async: true,
+                        is_action_like: true,
+                        attributes: vec![],
+                    }],
+                    calls: vec![IrCall {
+                        name: "execute".into(),
+                        file: "legacy.ts".into(),
+                        line: 53,
+                        kind: IrCallKind::Persistence,
+                    }],
+                    imports: vec![],
+                },
+            ],
+        };
+
+        let cfg_repo = build_cfg_repo(&repo);
+        let start = cfg_repo
+            .functions
+            .iter()
+            .find(|f| f.function_name == "adminCheckout")
+            .expect("start function should exist");
+        let symbol_table = SymbolTable::from_repo(&repo);
+        let call_targets = CallTargetIndex::from_symbol_table(
+            &cfg_repo,
+            &symbol_table,
+            ResolutionConfidence::Medium,
+        );
+
+        let hits = sinks_reachable_without_guards_interprocedural(
+            &cfg_repo,
+            start,
+            &[],
+            &FlowPredicateSet::generic_security(),
+            2,
+            Some(&call_targets),
         );
         assert!(hits.is_empty());
     }

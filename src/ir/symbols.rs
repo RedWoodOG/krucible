@@ -138,6 +138,10 @@ impl SymbolTable {
         }
         out
     }
+
+    pub fn resolved_calls(&self) -> &[ResolvedCall] {
+        &self.resolved_calls
+    }
 }
 
 pub fn build_symbol_table(repo: &IrRepo) -> SymbolTable {
