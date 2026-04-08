@@ -42,9 +42,9 @@ pub fn analyze(files: &[ParsedFile]) -> Vec<Issue> {
             continue;
         }
 
-        // Tauri commands are invoked by the Tauri runtime, not by Rust call sites.
-        // Never flag them as dead code — that's the Tauri analyzer's job.
-        if def.kind == FunctionKind::TauriCommand {
+        // Public functions may be entry points for external callers/framework runtime.
+        // Tauri commands are invoked by runtime, not Rust call sites.
+        if matches!(def.kind, FunctionKind::Public | FunctionKind::TauriCommand) {
             continue;
         }
 

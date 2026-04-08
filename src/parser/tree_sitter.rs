@@ -18,6 +18,7 @@ pub struct FunctionDef {
     pub name: String,
     pub file: String,
     pub line: usize,
+    pub end_line: usize,
     pub kind: FunctionKind,
     /// Raw attributes on this function (e.g. ["tauri::command", "allow(dead_code)"])
     pub attributes: Vec<String>,
@@ -211,6 +212,7 @@ fn extract_functions_recursive(
                         name,
                         file: file.to_string(),
                         line: node_line(node),
+                        end_line: node.end_position().row + 1,
                         kind: FunctionKind::Plain,
                         attributes: vec![],
                     });
@@ -241,6 +243,7 @@ fn extract_functions_recursive(
                             name,
                             file: file.to_string(),
                             line: node_line(node),
+                            end_line: node.end_position().row + 1,
                             kind: fn_kind,
                             attributes: attrs,
                         });
