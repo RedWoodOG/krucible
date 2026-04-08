@@ -51,6 +51,7 @@ This roadmap defines the engineering path from the current heuristic scanner to 
 
 ### Story 2.3: Type/context enrichment
 - Description: Attach minimal type/context metadata needed for higher-confidence rules.
+- Status: In Progress (IR context metadata added; contract + execution analyzers now consume context signals)
 - Acceptance criteria:
   - IR nodes include visibility, async, return-shape hints.
   - Rule engine can filter on type/context predicates.

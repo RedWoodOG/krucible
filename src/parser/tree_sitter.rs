@@ -19,6 +19,7 @@ pub struct FunctionDef {
     pub file: String,
     pub line: usize,
     pub end_line: usize,
+    pub is_async: bool,
     pub kind: FunctionKind,
     /// Raw attributes on this function (e.g. ["tauri::command", "allow(dead_code)"])
     pub attributes: Vec<String>,
@@ -213,6 +214,7 @@ fn extract_functions_recursive(
                         file: file.to_string(),
                         line: node_line(node),
                         end_line: node.end_position().row + 1,
+                        is_async: node_text(node, content).contains("async"),
                         kind: FunctionKind::Plain,
                         attributes: vec![],
                     });
@@ -244,6 +246,7 @@ fn extract_functions_recursive(
                             file: file.to_string(),
                             line: node_line(node),
                             end_line: node.end_position().row + 1,
+                            is_async: node_text(node, content).contains("async"),
                             kind: fn_kind,
                             attributes: attrs,
                         });

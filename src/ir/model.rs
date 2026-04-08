@@ -26,6 +26,19 @@ pub enum IrVisibility {
     RuntimeExposed,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IrCallKind {
+    AsyncAwaited,
+    Network,
+    Persistence,
+    Io,
+    Auth,
+    Notification,
+    PromiseThen,
+    PromiseCatch,
+    Other,
+}
+
 #[derive(Debug, Clone)]
 pub struct IrFunction {
     pub name: String,
@@ -33,6 +46,8 @@ pub struct IrFunction {
     pub start_line: usize,
     pub end_line: usize,
     pub visibility: IrVisibility,
+    pub is_async: bool,
+    pub is_action_like: bool,
     pub attributes: Vec<String>,
 }
 
@@ -41,6 +56,7 @@ pub struct IrCall {
     pub name: String,
     pub file: String,
     pub line: usize,
+    pub kind: IrCallKind,
 }
 
 #[derive(Debug, Clone)]
@@ -83,5 +99,14 @@ impl IrRepo {
                     .iter()
                     .find(|func| func.start_line == start_line && func.name == name)
             })
+    }
+
+    pub fn calls_in_function<'a>(&'a self, function: &'a IrFunction) -> impl Iterator<Item = &'a IrCall> {
+        self.files
+            .iter()
+            .find(|f| f.path == function.file)
+            .into_iter()
+            .flat_map(|f| f.calls.iter())
+            .filter(move |c| c.line >= function.start_line && c.line <= function.end_line)
     }
 }

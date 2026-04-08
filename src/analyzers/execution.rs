@@ -1,4 +1,5 @@
 use regex::Regex;
+use crate::ir::model::{IrCallKind, IrRepo};
 use crate::scanner::file_loader::SourceFile;
 use crate::report::schema::{Issue, IssueType, Severity};
 
@@ -6,7 +7,7 @@ use crate::report::schema::{Issue, IssueType, Severity};
 /// - async functions that never await
 /// - unhandled promise chains (no .catch)
 /// - fire-and-forget network calls
-pub fn analyze(files: &[SourceFile]) -> Vec<Issue> {
+pub fn analyze(files: &[SourceFile], repo: &IrRepo) -> Vec<Issue> {
     let mut issues = Vec::new();
 
     let async_fn = Regex::new(r"async\s+function\s+(\w+)").unwrap();
@@ -108,8 +109,61 @@ pub fn analyze(files: &[SourceFile]) -> Vec<Issue> {
         }
     }
 
+    // Add IR-assisted structural checks.
+    issues.extend(analyze_ir(repo));
+
     // Deduplicate by file+line
     issues.dedup_by(|a, b| a.file == b.file && a.line == b.line);
+
+    issues
+}
+
+/// IR-assisted execution checks:
+/// - action-like async functions with no async-like calls
+/// - promise `.then()` chains without nearby `.catch()`
+///
+/// This complements the text-based analyzer with structural context.
+pub fn analyze_ir(repo: &IrRepo) -> Vec<Issue> {
+    let mut issues = Vec::new();
+
+    for file in &repo.files {
+        // Promise then/catch structural check per file.
+        let then_lines: Vec<usize> = file
+            .calls
+            .iter()
+            .filter(|c| matches!(c.kind, IrCallKind::PromiseThen))
+            .map(|c| c.line)
+            .collect();
+        let catch_lines: Vec<usize> = file
+            .calls
+            .iter()
+            .filter(|c| matches!(c.kind, IrCallKind::PromiseCatch))
+            .map(|c| c.line)
+            .collect();
+
+        for then_line in then_lines {
+            let has_nearby_catch = catch_lines.iter().any(|catch_line| {
+                let distance = if *catch_line > then_line {
+                    *catch_line - then_line
+                } else {
+                    then_line - *catch_line
+                };
+                distance <= 12
+            });
+
+            if !has_nearby_catch {
+                issues.push(Issue {
+                    issue_type: IssueType::UnresolvedAsync,
+                    severity: Severity::Medium,
+                    file: file.path.clone(),
+                    line: Some(then_line),
+                    message: "Promise `.then()` with no nearby `.catch()` — rejection may be dropped".into(),
+                    claim: Some("Promise chain handles result".into()),
+                    reality: Some("No nearby `.catch()` call detected in structural call graph".into()),
+                });
+            }
+        }
+    }
 
     issues
 }

@@ -50,15 +50,15 @@ pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
     report.issues.append(&mut slop_issues);
 
     // 3. Contracts: heuristic Reality Gap
-    let mut contract_issues = contracts::analyze(&parsed);
+    let mut contract_issues = contracts::analyze(&ir_repo);
     report.issues.append(&mut contract_issues);
 
     // 4. Empty action stubs
-    let mut stub_issues = contracts::analyze_empty_stubs(&parsed);
+    let mut stub_issues = contracts::analyze_empty_stubs(&ir_repo);
     report.issues.append(&mut stub_issues);
 
     // 5. Execution integrity: async without await, unhandled promises
-    let mut exec_issues = execution::analyze(&source_files);
+    let mut exec_issues = execution::analyze(&source_files, &ir_repo);
     report.issues.append(&mut exec_issues);
 
     // 6. Tauri command wiring: annotation vs registration vs frontend invocation
