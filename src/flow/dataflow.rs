@@ -103,17 +103,15 @@ impl<'a> DataflowGraph<'a> {
                 .map(|n| n.id)
                 .collect()
         } else {
+            let source_set: HashSet<&str> = source_names.iter().copied().collect();
             self.cfg
                 .nodes
                 .iter()
-                .filter(|n| match &n.kind {
-                    CfgNodeKind::Call { name } => {
-                        source_names.iter().any(|source| {
-                            let source = source.to_lowercase();
-                            name.to_lowercase().contains(source.as_str())
-                        }) || profile.is_source(name)
-                    }
-                    _ => false,
+                .filter(|n| {
+                    matches!(
+                        &n.kind,
+                        CfgNodeKind::Call { name } if source_set.contains(name.as_str())
+                    )
                 })
                 .map(|n| n.id)
                 .collect()
@@ -185,15 +183,19 @@ impl<'a> DataflowGraph<'a> {
                 .map(|n| n.id)
                 .collect()
         } else {
-            let source_set: HashSet<&str> = source_names.iter().copied().collect();
             self.cfg
                 .nodes
                 .iter()
                 .filter(|n| {
-                    matches!(
-                        &n.kind,
-                        CfgNodeKind::Call { name } if source_set.contains(name.as_str())
-                    )
+                    match &n.kind {
+                        CfgNodeKind::Call { name } => {
+                            source_names.iter().any(|source| {
+                                let source = source.to_lowercase();
+                                name.to_lowercase().contains(source.as_str())
+                            }) || profile.is_source(name)
+                        }
+                        _ => false,
+                    }
                 })
                 .map(|n| n.id)
                 .collect()
@@ -332,10 +334,11 @@ pub fn sinks_reachable_without_guards_interprocedural(
         .functions
         .iter()
         .map(|function| {
-            function.edges.iter().fold(HashMap::new(), |mut acc, edge| {
-                acc.entry(edge.from).or_default().push(edge.to);
-                acc
-            })
+            let mut succ: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+            for edge in &function.edges {
+                succ.entry(edge.from).or_default().push(edge.to);
+            }
+            succ
         })
         .collect();
 

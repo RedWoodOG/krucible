@@ -74,6 +74,7 @@ This roadmap defines the engineering path from the current heuristic scanner to 
 
 ### Story 3.3: Interprocedural call flow
 - Description: Propagate flow facts across call boundaries.
+- Status: In Progress (bounded interprocedural guarded-sink traversal added with depth control and unit coverage for callee sinks/guards)
 - Acceptance criteria:
   - Dataflow follows function calls with depth control.
   - Performance budget documented and tested on fixture repos.
