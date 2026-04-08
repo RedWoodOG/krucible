@@ -111,3 +111,9 @@ pub fn print_json(report: &AuditReport) -> anyhow::Result<()> {
     println!("{}", serde_json::to_string_pretty(report)?);
     Ok(())
 }
+
+pub fn print_sarif(report: &AuditReport) -> anyhow::Result<()> {
+    let sarif = report.to_sarif();
+    println!("{}", serde_json::to_string_pretty(&sarif)?);
+    Ok(())
+}

@@ -34,6 +34,7 @@ struct Cli {
 enum OutputFormat {
     Human,
     Json,
+    Sarif,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -50,11 +51,15 @@ fn main() -> anyhow::Result<()> {
     match cli.format {
         OutputFormat::Human => formatter::print_human(&report),
         OutputFormat::Json => formatter::print_json(&report)?,
+        OutputFormat::Sarif => formatter::print_sarif(&report)?,
     }
 
     if let Some(out_path) = cli.output {
-        let json = serde_json::to_string_pretty(&report)?;
-        std::fs::write(&out_path, json)?;
+        let payload = match cli.format {
+            OutputFormat::Sarif => serde_json::to_string_pretty(&report.to_sarif())?,
+            _ => serde_json::to_string_pretty(&report)?,
+        };
+        std::fs::write(&out_path, payload)?;
         eprintln!("Report written to {}", out_path.display());
     }
 

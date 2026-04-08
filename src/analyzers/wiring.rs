@@ -27,6 +27,8 @@ pub fn analyze(files: &[ParsedFile]) -> Vec<Issue> {
         // Express/common
         "listen", "use", "get", "post", "put", "delete", "patch",
         "on", "emit", "connect", "close",
+        // Internal helper constructors/emitters used by serialization paths.
+        "sarif_rule",
     ];
 
     for def in &all_defs {

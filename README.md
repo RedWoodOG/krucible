@@ -17,7 +17,9 @@ Krucible is a structural code verification CLI that detects dead wiring, fake lo
 ```bash
 krucible ./path/to/repo
 krucible ./path/to/repo --format json
+krucible ./path/to/repo --format sarif
 krucible ./path/to/repo --format json --output report.json
+krucible ./path/to/repo --format sarif --output report.sarif.json
 ```
 
 ## Supported Languages (v1)
