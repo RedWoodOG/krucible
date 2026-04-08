@@ -67,7 +67,7 @@ This roadmap defines the engineering path from the current heuristic scanner to 
 
 ### Story 3.2: Intra-procedural dataflow engine
 - Description: Track value flow and state transitions within a function.
-- Status: In Progress (forward/backward reachability API added; execution analyzer now uses dataflow path checks for promise chains)
+- Status: In Progress (forward/backward reachability API added; execution analyzer now uses dataflow path checks for promise chains and includes a reusable guarded-sink query adapter)
 - Acceptance criteria:
   - Engine supports forward/backward flow queries.
   - Rules can query "value reaches sink without guard."

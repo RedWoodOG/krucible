@@ -48,6 +48,96 @@ impl<'a> DataflowGraph<'a> {
         reachable.iter().any(|n| targets.contains(n))
     }
 
+    /// Query for sink call nodes that are reachable from sources without hitting any guard call.
+    ///
+    /// - If `source_names` is empty, function entry nodes are used as sources.
+    /// - `sink_names` and `guard_names` are matched exactly against call names.
+    pub fn sinks_reachable_without_guards(
+        &self,
+        source_names: &[&str],
+        sink_names: &[&str],
+        guard_names: &[&str],
+    ) -> Vec<GuardedSinkHit> {
+        if sink_names.is_empty() {
+            return Vec::new();
+        }
+
+        let sink_set: HashSet<&str> = sink_names.iter().copied().collect();
+        let guard_set: HashSet<&str> = guard_names.iter().copied().collect();
+        let sink_nodes: HashSet<NodeId> = self
+            .cfg
+            .nodes
+            .iter()
+            .filter(|n| {
+                matches!(
+                    &n.kind,
+                    CfgNodeKind::Call { name } if sink_set.contains(name.as_str())
+                )
+            })
+            .map(|n| n.id)
+            .collect();
+
+        if sink_nodes.is_empty() {
+            return Vec::new();
+        }
+
+        let guard_nodes: HashSet<NodeId> = self
+            .cfg
+            .nodes
+            .iter()
+            .filter(|n| {
+                matches!(
+                    &n.kind,
+                    CfgNodeKind::Call { name } if guard_set.contains(name.as_str())
+                )
+            })
+            .map(|n| n.id)
+            .collect();
+
+        let source_nodes: Vec<NodeId> = if source_names.is_empty() {
+            self.cfg
+                .nodes
+                .iter()
+                .filter(|n| matches!(n.kind, CfgNodeKind::Entry))
+                .map(|n| n.id)
+                .collect()
+        } else {
+            let source_set: HashSet<&str> = source_names.iter().copied().collect();
+            self.cfg
+                .nodes
+                .iter()
+                .filter(|n| {
+                    matches!(
+                        &n.kind,
+                        CfgNodeKind::Call { name } if source_set.contains(name.as_str())
+                    )
+                })
+                .map(|n| n.id)
+                .collect()
+        };
+
+        let mut hits = Vec::new();
+        let mut seen_sink_nodes: HashSet<NodeId> = HashSet::new();
+        for source in source_nodes {
+            let reachable = self.reachable_skipping_guards(source, &guard_nodes);
+            for sink in &sink_nodes {
+                if !reachable.contains(sink) || !seen_sink_nodes.insert(*sink) {
+                    continue;
+                }
+                if let Some(node) = self.node_by_id(*sink) {
+                    if let CfgNodeKind::Call { name } = &node.kind {
+                        hits.push(GuardedSinkHit {
+                            sink_name: name.clone(),
+                            sink_line: node.line,
+                        });
+                    }
+                }
+            }
+        }
+
+        hits
+    }
+
     fn reachable(&self, starts: &[NodeId], direction: Direction) -> HashSet<NodeId> {
         let mut visited: HashSet<NodeId> = HashSet::new();
         let mut queue: VecDeque<NodeId> = starts.iter().copied().collect();
@@ -71,12 +161,48 @@ impl<'a> DataflowGraph<'a> {
 
         visited
     }
+
+    fn reachable_skipping_guards(
+        &self,
+        start: NodeId,
+        guard_nodes: &HashSet<NodeId>,
+    ) -> HashSet<NodeId> {
+        let mut visited: HashSet<NodeId> = HashSet::new();
+        let mut queue: VecDeque<NodeId> = VecDeque::from([start]);
+
+        while let Some(node) = queue.pop_front() {
+            if !visited.insert(node) {
+                continue;
+            }
+
+            if let Some(neighbors) = self.succ.get(&node) {
+                for next in neighbors {
+                    if guard_nodes.contains(next) || visited.contains(next) {
+                        continue;
+                    }
+                    queue.push_back(*next);
+                }
+            }
+        }
+
+        visited
+    }
+
+    fn node_by_id(&self, id: NodeId) -> Option<&CfgNode> {
+        self.cfg.nodes.iter().find(|n| n.id == id)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 enum Direction {
     Forward,
     Backward,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuardedSinkHit {
+    pub sink_name: String,
+    pub sink_line: Option<usize>,
 }
 
 pub fn build_dataflow_graphs(cfg_repo: &CfgRepo) -> Vec<DataflowGraph<'_>> {
@@ -145,5 +271,60 @@ mod tests {
         let back = df.backward_reachable_from(&start);
         assert!(!fwd.is_empty());
         assert!(!back.is_empty());
+    }
+
+    #[test]
+    fn detects_sink_reachable_without_guard() {
+        let cfg = sample_cfg();
+        let df = DataflowGraph::new(&cfg);
+        let hits = df.sinks_reachable_without_guards(&["then"], &["catch"], &["validate"]);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].sink_name, "catch");
+    }
+
+    #[test]
+    fn skips_sink_when_guard_blocks_path() {
+        let repo = IrRepo {
+            files: vec![IrFile {
+                path: "x.ts".into(),
+                language: IrLanguage::TypeScript,
+                functions: vec![IrFunction {
+                    name: "work".into(),
+                    file: "x.ts".into(),
+                    start_line: 10,
+                    end_line: 30,
+                    visibility: IrVisibility::Private,
+                    is_async: true,
+                    is_action_like: true,
+                    attributes: vec![],
+                }],
+                calls: vec![
+                    IrCall {
+                        name: "input".into(),
+                        file: "x.ts".into(),
+                        line: 11,
+                        kind: IrCallKind::Other,
+                    },
+                    IrCall {
+                        name: "validate".into(),
+                        file: "x.ts".into(),
+                        line: 12,
+                        kind: IrCallKind::Auth,
+                    },
+                    IrCall {
+                        name: "execute".into(),
+                        file: "x.ts".into(),
+                        line: 13,
+                        kind: IrCallKind::Persistence,
+                    },
+                ],
+                imports: vec![],
+            }],
+        };
+
+        let cfg = build_cfg_repo(&repo).functions.into_iter().next().unwrap();
+        let df = DataflowGraph::new(&cfg);
+        let hits = df.sinks_reachable_without_guards(&["input"], &["execute"], &["validate"]);
+        assert!(hits.is_empty());
     }
 }

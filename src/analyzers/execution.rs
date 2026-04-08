@@ -168,7 +168,79 @@ pub fn analyze_ir(repo: &IrRepo) -> Vec<Issue> {
         }
     }
 
+    // Sensitive sink guard checks: detect paths to risky sinks without
+    // validation/authorization guard calls in the same function flow.
+    for function_cfg in &cfg_repo.functions {
+        if !is_sensitive_function_name(&function_cfg.function_name) {
+            continue;
+        }
+        let graph = dataflow::DataflowGraph::new(function_cfg);
+        let unguarded_sinks = graph.sinks_reachable_without_guards(
+            &[],
+            &[
+                "execute",
+                "query",
+                "delete",
+                "update",
+                "insert",
+                "save",
+                "fetch",
+                "request",
+                "post",
+                "put",
+                "patch",
+                "invoke",
+            ],
+            &[
+                "validate",
+                "verify",
+                "authorize",
+                "authenticate",
+                "check_permission",
+                "guard",
+                "sanitize",
+            ],
+        );
+
+        for hit in unguarded_sinks {
+            issues.push(Issue {
+                issue_type: IssueType::ContractViolation,
+                severity: Severity::Medium,
+                file: function_cfg.file.clone(),
+                line: hit.sink_line.or(Some(function_cfg.start_line)),
+                message: format!(
+                    "Sensitive sink `{}` reachable without guard in `{}`",
+                    hit.sink_name, function_cfg.function_name
+                ),
+                claim: Some(format!(
+                    "`{}` appears security-sensitive and should enforce validation/authorization before sink calls",
+                    function_cfg.function_name
+                )),
+                reality: Some(
+                    "A sink is reachable from function entry without encountering guard calls (validate/verify/authorize/etc.)".into(),
+                ),
+            });
+        }
+    }
+
     issues
+}
+
+fn is_sensitive_function_name(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    [
+        "auth",
+        "login",
+        "permission",
+        "token",
+        "delete",
+        "update",
+        "charge",
+        "payment",
+        "admin",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
 }
 
 fn has_dataflow_path_to_catch(
