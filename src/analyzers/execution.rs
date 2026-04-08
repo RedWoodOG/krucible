@@ -1,5 +1,7 @@
+use std::collections::HashSet;
 use regex::Regex;
 use crate::ir::model::{IrCallKind, IrRepo};
+use crate::flow::{cfg, dataflow};
 use crate::scanner::file_loader::SourceFile;
 use crate::report::schema::{Issue, IssueType, Severity};
 
@@ -125,6 +127,7 @@ pub fn analyze(files: &[SourceFile], repo: &IrRepo) -> Vec<Issue> {
 /// This complements the text-based analyzer with structural context.
 pub fn analyze_ir(repo: &IrRepo) -> Vec<Issue> {
     let mut issues = Vec::new();
+    let cfg_repo = cfg::build_cfg_repo(repo);
 
     for file in &repo.files {
         // Promise then/catch structural check per file.
@@ -149,7 +152,7 @@ pub fn analyze_ir(repo: &IrRepo) -> Vec<Issue> {
                     then_line - *catch_line
                 };
                 distance <= 12
-            });
+            }) || has_dataflow_path_to_catch(&cfg_repo, &file.path, then_line, &catch_lines);
 
             if !has_nearby_catch {
                 issues.push(Issue {
@@ -166,4 +169,39 @@ pub fn analyze_ir(repo: &IrRepo) -> Vec<Issue> {
     }
 
     issues
+}
+
+fn has_dataflow_path_to_catch(
+    cfg_repo: &cfg::CfgRepo,
+    file_path: &str,
+    then_line: usize,
+    catch_lines: &[usize],
+) -> bool {
+    if catch_lines.is_empty() {
+        return false;
+    }
+
+    let catch_set: HashSet<usize> = catch_lines.iter().copied().collect();
+    for function_cfg in cfg_repo.functions.iter().filter(|f| f.file == file_path) {
+        let maybe_then_node = function_cfg.nodes.iter().find(|n| {
+            n.line == Some(then_line)
+                && matches!(&n.kind, cfg::CfgNodeKind::Call { name } if name == "then")
+        });
+        let Some(then_node) = maybe_then_node else {
+            continue;
+        };
+
+        let graph = dataflow::DataflowGraph::new(function_cfg);
+        let reachable = graph.forward_reachable_from(&[then_node.id]);
+        let reaches_catch = function_cfg.nodes.iter().any(|node| {
+            reachable.contains(&node.id)
+                && node.line.map(|line| catch_set.contains(&line)).unwrap_or(false)
+                && matches!(&node.kind, cfg::CfgNodeKind::Call { name } if name == "catch")
+        });
+        if reaches_catch {
+            return true;
+        }
+    }
+
+    false
 }

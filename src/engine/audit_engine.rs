@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::Path;
 use std::collections::HashMap;
-use crate::flow::cfg;
+use crate::flow::{cfg, dataflow};
 use crate::scanner::file_loader;
 use crate::ir::builder as ir_builder;
 use crate::parser::tree_sitter as ts_parser;
@@ -37,7 +37,8 @@ pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
         .filter_map(|f| ts_parser::parse_file(f).ok())
         .collect();
     let ir_repo = ir_builder::from_parsed_files(&parsed);
-    let _cfg_repo = cfg::build_cfg_repo(&ir_repo);
+    let cfg_repo = cfg::build_cfg_repo(&ir_repo);
+    let _dataflow_repo = dataflow::build_dataflow_graphs(&cfg_repo);
 
     let mut report = AuditReport::new(&repo_str, file_count);
 
