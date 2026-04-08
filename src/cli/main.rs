@@ -43,6 +43,10 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     deep: bool,
 
+    /// Optional flow model file (JSON) overriding default source/sink/guard profiles
+    #[arg(long, value_name = "FILE")]
+    flow_model: Option<PathBuf>,
+
     /// Maximum allowed HIGH findings before non-zero exit
     #[arg(long, value_name = "N")]
     max_high: Option<usize>,
@@ -71,7 +75,15 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(2);
     }
 
-    let opts = AuditOptions { deep: cli.deep };
+    let opts = AuditOptions {
+        deep: cli.deep,
+        flow_model_path: cli.flow_model.clone(),
+    };
+    if let Some(path) = &cli.flow_model {
+        if !path.exists() {
+            anyhow::bail!("Flow model path '{}' does not exist.", path.display());
+        }
+    }
     let mut report = audit_engine::run_audit(&cli.path, opts)?;
     let full_report = report.clone();
 

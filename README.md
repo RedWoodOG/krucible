@@ -20,6 +20,7 @@ krucible ./path/to/repo --format json
 krucible ./path/to/repo --format sarif
 krucible ./path/to/repo --format json --output report.json
 krucible ./path/to/repo --format sarif --output report.sarif.json
+krucible ./path/to/repo --flow-model ./.krucible/flow-models.json
 krucible ./path/to/repo --write-baseline baseline.json
 krucible ./path/to/repo --baseline baseline.json --only-new --format sarif
 krucible ./path/to/repo --max-high 0 --max-medium 5 --max-low 20
@@ -34,6 +35,27 @@ krucible ./path/to/repo --max-high 0 --max-medium 5 --max-low 20
 - Enforce policy thresholds:
   - `--max-high N --max-medium N --max-low N`
   - If no thresholds are provided, default policy is unchanged: fail when HIGH findings exist.
+
+## Flow Model Configuration
+
+- Optional flow policy file:
+  - `--flow-model ./.krucible/flow-models.json`
+- If omitted, Krucible uses built-in profiles (`generic_security`, `web_api`).
+- File schema:
+
+```json
+{
+  "profiles": {
+    "custom_profile": {
+      "sources": ["request", "body"],
+      "sinks": ["execute", "invoke"],
+      "guards": ["validate", "authorize"],
+      "sanitizers": ["escape", "sanitize"],
+      "sensitive_functions": ["admin", "payment", "auth"]
+    }
+  }
+}
+```
 
 ## Supported Languages (v1)
 

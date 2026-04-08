@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::Path;
 use std::collections::HashMap;
-use crate::flow::{cfg, dataflow};
+use crate::flow::{cfg, dataflow, predicates};
 use crate::scanner::file_loader;
 use crate::ir::builder as ir_builder;
 use crate::parser::tree_sitter as ts_parser;
@@ -12,6 +12,8 @@ use crate::report::schema::AuditReport;
 pub struct AuditOptions {
     /// Enable LLM-powered deep analysis (requires LiteLLM proxy on localhost:4000)
     pub deep: bool,
+    /// Optional path to custom flow model profile JSON
+    pub flow_model_path: Option<std::path::PathBuf>,
 }
 
 pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
@@ -39,6 +41,10 @@ pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
     let ir_repo = ir_builder::from_parsed_files(&parsed);
     let cfg_repo = cfg::build_cfg_repo(&ir_repo);
     let _dataflow_repo = dataflow::build_dataflow_graphs(&cfg_repo);
+    let flow_policies = predicates::load_policies(
+        repo_path,
+        opts.flow_model_path.as_deref(),
+    )?;
 
     let mut report = AuditReport::new(&repo_str, file_count);
 
@@ -61,7 +67,7 @@ pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
     report.issues.append(&mut stub_issues);
 
     // 5. Execution integrity: async without await, unhandled promises
-    let mut exec_issues = execution::analyze(&source_files, &ir_repo);
+    let mut exec_issues = execution::analyze(&source_files, &ir_repo, &flow_policies);
     report.issues.append(&mut exec_issues);
 
     // 6. Tauri command wiring: annotation vs registration vs frontend invocation

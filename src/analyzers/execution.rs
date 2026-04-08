@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 use regex::Regex;
 use crate::ir::model::{IrCallKind, IrRepo};
-use crate::flow::{cfg, dataflow, predicates};
+use crate::flow::{cfg, dataflow};
+use crate::flow::predicates::FlowPredicateSet;
 use crate::scanner::file_loader::SourceFile;
 use crate::report::schema::{Issue, IssueType, Severity};
 
@@ -9,7 +10,7 @@ use crate::report::schema::{Issue, IssueType, Severity};
 /// - async functions that never await
 /// - unhandled promise chains (no .catch)
 /// - fire-and-forget network calls
-pub fn analyze(files: &[SourceFile], repo: &IrRepo) -> Vec<Issue> {
+pub fn analyze(files: &[SourceFile], repo: &IrRepo, policies: &[FlowPredicateSet]) -> Vec<Issue> {
     let mut issues = Vec::new();
 
     let async_fn = Regex::new(r"async\s+function\s+(\w+)").unwrap();
@@ -112,7 +113,7 @@ pub fn analyze(files: &[SourceFile], repo: &IrRepo) -> Vec<Issue> {
     }
 
     // Add IR-assisted structural checks.
-    issues.extend(analyze_ir(repo));
+    issues.extend(analyze_ir(repo, policies));
 
     // Deduplicate by file+line
     issues.dedup_by(|a, b| a.file == b.file && a.line == b.line);
@@ -125,7 +126,7 @@ pub fn analyze(files: &[SourceFile], repo: &IrRepo) -> Vec<Issue> {
 /// - promise `.then()` chains without nearby `.catch()`
 ///
 /// This complements the text-based analyzer with structural context.
-pub fn analyze_ir(repo: &IrRepo) -> Vec<Issue> {
+pub fn analyze_ir(repo: &IrRepo, policies: &[FlowPredicateSet]) -> Vec<Issue> {
     let mut issues = Vec::new();
     let cfg_repo = cfg::build_cfg_repo(repo);
 
@@ -170,21 +171,23 @@ pub fn analyze_ir(repo: &IrRepo) -> Vec<Issue> {
 
     // Sensitive sink guard checks: detect paths to risky sinks without
     // validation/authorization guard calls in the same function flow.
-    // Use layered predicate sets so frameworks can evolve independently.
-    let generic_policy = predicates::generic_security();
-    let web_policy = predicates::web_api();
-    let source_names = Vec::<&str>::new();
+    // Policy sets may come from defaults or external model files.
     for function_cfg in &cfg_repo.functions {
-        if !generic_policy.is_sensitive_function(&function_cfg.function_name)
-            && !web_policy.is_sensitive_function(&function_cfg.function_name)
+        if !policies
+            .iter()
+            .any(|p| p.is_sensitive_function(&function_cfg.function_name))
         {
             continue;
         }
         let graph = dataflow::DataflowGraph::new(function_cfg);
-        let policy_refs = [&generic_policy, &web_policy];
         let mut unguarded_sinks = Vec::new();
         let mut seen = HashSet::new();
-        for policy in policy_refs {
+        for policy in policies {
+            let source_names: Vec<&str> = policy
+                .source_names
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
             let hits = graph.sinks_reachable_without_guards_by_profile(&source_names, policy);
             for hit in hits {
                 let key = (hit.sink_name.clone(), hit.sink_line);
