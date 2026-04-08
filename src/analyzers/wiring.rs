@@ -1,21 +1,26 @@
 use std::collections::HashSet;
-use crate::parser::tree_sitter::{ParsedFile, FunctionKind};
+use crate::ir::builder as ir_builder;
+use crate::ir::model::{IrRepo, IrVisibility};
+use crate::parser::tree_sitter::ParsedFile;
 use crate::report::schema::{Issue, IssueType, Severity};
 
 /// Cross-reference all function definitions against all call sites.
 /// Any function defined but never called anywhere = dead code / fake wiring.
 pub fn analyze(files: &[ParsedFile]) -> Vec<Issue> {
+    let repo = ir_builder::from_parsed_files(files);
+    analyze_ir(&repo)
+}
+
+/// IR-backed wiring analyzer.
+/// This is the first analyzer migrated to the normalized IR layer.
+pub fn analyze_ir(repo: &IrRepo) -> Vec<Issue> {
     let mut issues = Vec::new();
 
     // Collect all function names defined across the entire repo
-    let all_defs: Vec<_> = files.iter()
-        .flat_map(|f| f.functions.iter())
-        .collect();
+    let all_defs: Vec<_> = repo.all_functions().collect();
 
     // Collect all call site names across the entire repo
-    let all_calls: HashSet<String> = files.iter()
-        .flat_map(|f| f.calls.iter().map(|c| c.name.clone()))
-        .collect();
+    let all_calls: HashSet<String> = repo.all_calls().map(|c| c.name.clone()).collect();
 
     // Skip these — common entry points / lifecycle functions that are called by runtime
     let ignored = [
@@ -46,7 +51,7 @@ pub fn analyze(files: &[ParsedFile]) -> Vec<Issue> {
 
         // Public functions may be entry points for external callers/framework runtime.
         // Tauri commands are invoked by runtime, not Rust call sites.
-        if matches!(def.kind, FunctionKind::Public | FunctionKind::TauriCommand) {
+        if matches!(def.visibility, IrVisibility::Public | IrVisibility::RuntimeExposed) {
             continue;
         }
 
@@ -55,7 +60,7 @@ pub fn analyze(files: &[ParsedFile]) -> Vec<Issue> {
                 issue_type: IssueType::DeadCode,
                 severity: Severity::Medium,
                 file: def.file.clone(),
-                line: Some(def.line),
+                line: Some(def.start_line),
                 message: format!("Function defined but never called: `{name}()`"),
                 claim: Some(format!("`{name}` is defined as a callable function")),
                 reality: Some("No call site found anywhere in the repo".into()),

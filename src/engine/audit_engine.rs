@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::path::Path;
 use std::collections::HashMap;
 use crate::scanner::file_loader;
+use crate::ir::builder as ir_builder;
 use crate::parser::tree_sitter as ts_parser;
 use crate::analyzers::{wiring, slop, contracts, execution, llm, tauri};
 use crate::report::schema::AuditReport;
@@ -34,13 +35,14 @@ pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
     let parsed: Vec<_> = source_files.iter()
         .filter_map(|f| ts_parser::parse_file(f).ok())
         .collect();
+    let ir_repo = ir_builder::from_parsed_files(&parsed);
 
     let mut report = AuditReport::new(&repo_str, file_count);
 
     // --- Static analyzers (always run) ---
 
     // 1. Wiring: dead code, unused functions
-    let mut wiring_issues = wiring::analyze(&parsed);
+    let mut wiring_issues = wiring::analyze_ir(&ir_repo);
     report.issues.append(&mut wiring_issues);
 
     // 2. Slop: TODOs, mocks, stubs, temp fixes

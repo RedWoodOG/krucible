@@ -37,6 +37,7 @@ This roadmap defines the engineering path from the current heuristic scanner to 
 
 ### Story 2.1: Normalized Intermediate Representation (IR)
 - Description: Introduce a language-agnostic IR for functions, calls, modules, imports, and symbols.
+- Status: In progress (IR scaffold added; wiring analyzer migrated to IR path)
 - Acceptance criteria:
   - Rust + TS/JS frontends emit IR with equivalent semantic fields.
   - Existing analyzers can run from IR adapter.
