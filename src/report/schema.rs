@@ -41,6 +41,8 @@ pub enum IssueType {
     AiSlop,
     ContractViolation,
     UnresolvedAsync,
+    CompilerDiagnostic,
+    SecurityRisk,
 }
 
 impl IssueType {
@@ -53,6 +55,8 @@ impl IssueType {
             IssueType::AiSlop => "KRU005",
             IssueType::ContractViolation => "KRU006",
             IssueType::UnresolvedAsync => "KRU007",
+            IssueType::CompilerDiagnostic => "KRU008",
+            IssueType::SecurityRisk => "KRU009",
         }
     }
 
@@ -65,6 +69,8 @@ impl IssueType {
             IssueType::AiSlop => "ai-slop",
             IssueType::ContractViolation => "contract-violation",
             IssueType::UnresolvedAsync => "unresolved-async",
+            IssueType::CompilerDiagnostic => "compiler-diagnostic",
+            IssueType::SecurityRisk => "security-risk",
         }
     }
 }
@@ -117,15 +123,24 @@ impl AuditReport {
     }
 
     pub fn high_count(&self) -> usize {
-        self.issues.iter().filter(|i| matches!(i.severity, Severity::High)).count()
+        self.issues
+            .iter()
+            .filter(|i| matches!(i.severity, Severity::High))
+            .count()
     }
 
     pub fn medium_count(&self) -> usize {
-        self.issues.iter().filter(|i| matches!(i.severity, Severity::Medium)).count()
+        self.issues
+            .iter()
+            .filter(|i| matches!(i.severity, Severity::Medium))
+            .count()
     }
 
     pub fn low_count(&self) -> usize {
-        self.issues.iter().filter(|i| matches!(i.severity, Severity::Low)).count()
+        self.issues
+            .iter()
+            .filter(|i| matches!(i.severity, Severity::Low))
+            .count()
     }
 
     pub fn to_sarif(&self) -> SarifLog {
@@ -137,6 +152,8 @@ impl AuditReport {
             sarif_rule(IssueType::AiSlop),
             sarif_rule(IssueType::ContractViolation),
             sarif_rule(IssueType::UnresolvedAsync),
+            sarif_rule(IssueType::CompilerDiagnostic),
+            sarif_rule(IssueType::SecurityRisk),
         ];
 
         let results = self
@@ -228,6 +245,8 @@ fn sarif_rule(issue_type: IssueType) -> SarifRule {
         IssueType::AiSlop => Severity::Medium.as_level(),
         IssueType::ContractViolation => Severity::High.as_level(),
         IssueType::UnresolvedAsync => Severity::Medium.as_level(),
+        IssueType::CompilerDiagnostic => Severity::Medium.as_level(),
+        IssueType::SecurityRisk => Severity::High.as_level(),
     };
 
     SarifRule {

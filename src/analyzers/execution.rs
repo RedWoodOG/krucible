@@ -236,6 +236,7 @@ pub fn analyze_ir(repo: &IrRepo, policies: &[FlowPredicateSet]) -> Vec<Issue> {
             } else {
                 format!(" [taint tags: {}]", hit.sink_tags.join(","))
             };
+            let cwe_hint = cwe_for_taint_tags(&hit.sink_tags);
             issues.push(Issue {
                 issue_type: IssueType::ContractViolation,
                 severity: Severity::Medium,
@@ -249,14 +250,45 @@ pub fn analyze_ir(repo: &IrRepo, policies: &[FlowPredicateSet]) -> Vec<Issue> {
                     "`{}` appears security-sensitive and should enforce validation/authorization before sink calls",
                     function_cfg.function_name
                 )),
-                reality: Some(
-                    "A sink is reachable from function entry without encountering effective guards or strong sanitizers for the active taint tags across bounded call flow".into(),
-                ),
+                reality: Some(match cwe_hint {
+                    Some(cwe) => format!(
+                        "Potential {cwe}: sink reachable from function entry without effective guards or strong sanitizers for active taint tags across bounded call flow"
+                    ),
+                    None => "A sink is reachable from function entry without encountering effective guards or strong sanitizers for the active taint tags across bounded call flow".into(),
+                }),
             });
         }
     }
 
     issues
+}
+
+fn cwe_for_taint_tags(tags: &[String]) -> Option<&'static str> {
+    if tags.is_empty() {
+        return None;
+    }
+    if tags.iter().any(|t| t == "sql" || t == "sqli") {
+        return Some("CWE-89 (SQL Injection)");
+    }
+    if tags
+        .iter()
+        .any(|t| t == "path" || t == "filesystem" || t == "file")
+    {
+        return Some("CWE-22 (Path Traversal)");
+    }
+    if tags
+        .iter()
+        .any(|t| t == "ssrf" || t == "url" || t == "network")
+    {
+        return Some("CWE-918 (SSRF)");
+    }
+    if tags
+        .iter()
+        .any(|t| t == "command" || t == "shell" || t == "exec")
+    {
+        return Some("CWE-78 (OS Command Injection)");
+    }
+    None
 }
 
 fn has_dataflow_path_to_catch(
@@ -296,3 +328,4 @@ fn has_dataflow_path_to_catch(
 
     false
 }
+

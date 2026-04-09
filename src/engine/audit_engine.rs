@@ -1,12 +1,12 @@
-use anyhow::Result;
-use std::path::Path;
-use std::collections::HashMap;
+use crate::analyzers::{contracts, diagnostics, execution, llm, slop, tauri, wiring};
 use crate::flow::{cfg, dataflow, predicates};
-use crate::scanner::file_loader;
 use crate::ir::builder as ir_builder;
 use crate::parser::tree_sitter as ts_parser;
-use crate::analyzers::{wiring, slop, contracts, execution, llm, tauri};
 use crate::report::schema::AuditReport;
+use crate::scanner::file_loader;
+use anyhow::Result;
+use std::collections::HashMap;
+use std::path::Path;
 
 #[derive(Default)]
 pub struct AuditOptions {
@@ -35,16 +35,14 @@ pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
         .collect();
 
     // Phase 2: Parse
-    let parsed: Vec<_> = source_files.iter()
+    let parsed: Vec<_> = source_files
+        .iter()
         .filter_map(|f| ts_parser::parse_file(f).ok())
         .collect();
     let ir_repo = ir_builder::from_parsed_files(&parsed);
     let cfg_repo = cfg::build_cfg_repo(&ir_repo);
     let _dataflow_repo = dataflow::build_dataflow_graphs(&cfg_repo);
-    let flow_policies = predicates::load_policies(
-        repo_path,
-        opts.flow_model_path.as_deref(),
-    )?;
+    let flow_policies = predicates::load_policies(repo_path, opts.flow_model_path.as_deref())?;
 
     let mut report = AuditReport::new(&repo_str, file_count);
 
@@ -74,6 +72,10 @@ pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
     let mut tauri_issues = tauri::analyze(&parsed, &source_map);
     report.issues.append(&mut tauri_issues);
 
+    // 7. Compiler diagnostics: rustc/cargo check and tsc findings.
+    let mut compiler_issues = diagnostics::analyze(repo_path);
+    report.issues.append(&mut compiler_issues);
+
     // --- LLM-powered deep analysis (--deep flag) ---
     if opts.deep {
         eprintln!("\nRunning deep LLM analysis via Qwen2.5-32B...");
@@ -83,14 +85,22 @@ pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
 
         // Only deduplicate against existing CONTRACT violations (same type) — not dead code
         // LLM findings are a different insight even if the line overlaps
-        let existing_contract_keys: std::collections::HashSet<(String, usize)> = report.issues
+        let existing_contract_keys: std::collections::HashSet<(String, usize)> = report
+            .issues
             .iter()
-            .filter(|i| matches!(i.issue_type, crate::report::schema::IssueType::ContractViolation))
+            .filter(|i| {
+                matches!(
+                    i.issue_type,
+                    crate::report::schema::IssueType::ContractViolation
+                )
+            })
             .filter_map(|i| i.line.map(|l| (i.file.clone(), l)))
             .collect();
 
         llm_issues.retain(|i| {
-            !i.line.map(|l| existing_contract_keys.contains(&(i.file.clone(), l))).unwrap_or(false)
+            !i.line
+                .map(|l| existing_contract_keys.contains(&(i.file.clone(), l)))
+                .unwrap_or(false)
         });
 
         let count = llm_issues.len();
@@ -115,9 +125,9 @@ pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
     });
 
     // Deduplicate: same file + line + message
-    report.issues.dedup_by(|a, b| {
-        a.file == b.file && a.line == b.line && a.message == b.message
-    });
+    report
+        .issues
+        .dedup_by(|a, b| a.file == b.file && a.line == b.line && a.message == b.message);
 
     Ok(report)
 }

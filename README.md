@@ -21,6 +21,7 @@ krucible ./path/to/repo --format sarif
 krucible ./path/to/repo --format json --output report.json
 krucible ./path/to/repo --format sarif --output report.sarif.json
 krucible ./path/to/repo --flow-model ./.krucible/flow-models.json
+krucible ./path/to/repo --skip-compiler-diagnostics
 krucible ./path/to/repo --write-baseline baseline.json
 krucible ./path/to/repo --baseline baseline.json --only-new --format sarif
 krucible ./path/to/repo --max-high 0 --max-medium 5 --max-low 20
@@ -68,6 +69,39 @@ krucible ./path/to/repo --max-high 0 --max-medium 5 --max-low 20
   }
 }
 ```
+
+Typed models can now express categories and sanitizer strength:
+
+```json
+{
+  "profiles": {
+    "secure_api": {
+      "source_models": [
+        { "pattern": "request", "tags": ["pii"] }
+      ],
+      "sink_models": [
+        { "pattern": "execute", "tags": ["pii"] }
+      ],
+      "sanitizer_models": [
+        { "pattern": "sanitize", "tags": ["pii"], "strength": "strong" },
+        { "pattern": "mask", "tags": ["pii"], "strength": "weak" }
+      ]
+    }
+  }
+}
+```
+
+- `strong` sanitizers remove matching taint tags before sink matching.
+- `weak` sanitizers are advisory and do not clear taint.
+
+## Compiler Diagnostics Ingestion
+
+- By default Krucible also ingests compiler diagnostics as first-class findings:
+  - Rust: `cargo check --message-format=json` when a `Cargo.toml` is present.
+  - TypeScript/JavaScript: `npx --yes tsc --noEmit --pretty false` when a `tsconfig.json` is present.
+- If tooling is unavailable or checks fail unexpectedly, Krucible keeps scanning and reports an informational diagnostics issue instead of crashing.
+- Disable diagnostics ingestion with:
+  - `--skip-compiler-diagnostics`
 
 - Typed model notes:
   - `source_models` / `sink_models` tags define taint categories (e.g. `pii`, `payment`).

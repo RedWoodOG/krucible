@@ -90,6 +90,7 @@ This roadmap defines the engineering path from the current heuristic scanner to 
 
 ### Story 4.2: Security MVP rules
 - Description: Implement initial CWE-aligned set.
+- Status: In Progress (typed taint-tagged sink findings now emit initial CWE-style classes for SQLi/SSRF/path traversal/command execution)
 - Acceptance criteria:
   - Path traversal, command injection, SSRF, SQL injection MVP checks.
   - Rule docs include rationale, false-positive notes, examples.
