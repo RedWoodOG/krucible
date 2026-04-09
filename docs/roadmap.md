@@ -141,6 +141,16 @@ This roadmap defines the engineering path from the current heuristic scanner to 
   - Opt-in only.
   - Exports aggregate metrics (issue counts by rule/severity over time).
 
+## Epic 7: Compiler Correctness Ingestion
+
+### Story 7.1: Native compiler/type-check diagnostics
+- Description: Ingest Rust and TypeScript compiler diagnostics as first-class findings.
+- Status: In Progress (`cargo check --message-format json` and `tsc --noEmit` ingestion added with severity normalization and SARIF/JSON propagation)
+- Acceptance criteria:
+  - Rust compile diagnostics captured with file/line and compiler code when available.
+  - TypeScript diagnostics captured when `tsconfig.json` exists.
+  - Findings map into CI policy and baseline workflows.
+
 ## Release Milestones
 
 - R1 (Near-term): Epic 1 complete + partial Epic 2 (IR skeleton).
