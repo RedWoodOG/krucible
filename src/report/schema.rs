@@ -265,6 +265,7 @@ fn sarif_rule(issue_type: IssueType) -> SarifRule {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SarifLog {
     pub version: String,
     #[serde(rename = "$schema")]
@@ -273,17 +274,20 @@ pub struct SarifLog {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SarifRun {
     pub tool: SarifTool,
     pub results: Vec<SarifResult>,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SarifTool {
     pub driver: SarifDriver,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SarifDriver {
     pub name: String,
     pub information_uri: String,
@@ -292,6 +296,7 @@ pub struct SarifDriver {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SarifRule {
     pub id: String,
     pub name: String,
@@ -301,11 +306,13 @@ pub struct SarifRule {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SarifDefaultConfiguration {
     pub level: String,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SarifResult {
     pub rule_id: String,
     pub level: String,
@@ -315,21 +322,25 @@ pub struct SarifResult {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SarifPartialFingerprints {
     pub primary_location_line_hash: String,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SarifMessage {
     pub text: String,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SarifLocation {
     pub physical_location: SarifPhysicalLocation,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SarifPhysicalLocation {
     pub artifact_location: SarifArtifactLocation,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -337,11 +348,13 @@ pub struct SarifPhysicalLocation {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SarifArtifactLocation {
     pub uri: String,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SarifRegion {
     pub start_line: usize,
 }

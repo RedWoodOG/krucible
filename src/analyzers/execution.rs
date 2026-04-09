@@ -1,6 +1,6 @@
 use crate::flow::predicates::FlowPredicateSet;
 use crate::flow::{cfg, dataflow};
-use crate::ir::model::{IrCallKind, IrRepo};
+use crate::ir::model::{IrCallKind, IrFile, IrRepo};
 use crate::ir::symbols::{ResolutionConfidence, SymbolTable};
 use crate::report::schema::{Issue, IssueType, Severity};
 use crate::scanner::file_loader::SourceFile;
@@ -166,15 +166,12 @@ pub fn analyze_ir(repo: &IrRepo, policies: &[FlowPredicateSet]) -> Vec<Issue> {
             .collect();
 
         for then_line in then_lines {
+            let scoped_catch =
+                catch_lines_in_enclosing_function(file, then_line, &catch_lines);
             let has_nearby_catch =
-                catch_lines.iter().any(|catch_line| {
-                    let distance = if *catch_line > then_line {
-                        *catch_line - then_line
-                    } else {
-                        then_line - *catch_line
-                    };
-                    distance <= 12
-                }) || has_dataflow_path_to_catch(&cfg_repo, &file.path, then_line, &catch_lines);
+                scoped_catch
+                    .iter()
+                    .any(|catch_line| (*catch_line).abs_diff(then_line) <= 12) || has_dataflow_path_to_catch(&cfg_repo, &file.path, then_line, &scoped_catch);
 
             if !has_nearby_catch {
                 issues.push(Issue {
@@ -289,6 +286,26 @@ fn cwe_for_taint_tags(tags: &[String]) -> Option<&'static str> {
         return Some("CWE-78 (OS Command Injection)");
     }
     None
+}
+
+fn catch_lines_in_enclosing_function(
+    file: &IrFile,
+    then_line: usize,
+    all_catch_lines: &[usize],
+) -> Vec<usize> {
+    let Some(span) = file
+        .functions
+        .iter()
+        .filter(|f| f.start_line <= then_line && then_line <= f.end_line)
+        .min_by_key(|f| f.end_line.saturating_sub(f.start_line))
+    else {
+        return all_catch_lines.to_vec();
+    };
+    all_catch_lines
+        .iter()
+        .copied()
+        .filter(|l| *l >= span.start_line && *l <= span.end_line)
+        .collect()
 }
 
 fn has_dataflow_path_to_catch(

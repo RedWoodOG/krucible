@@ -1,0 +1,8 @@
+# CodeRabbit review settings — use supported keys only.
+# See: https://docs.coderabbit.ai/reference/configuration
+language: en-US
+reviews:
+  profile: chill
+  auto_review:
+    enabled: true
+  incremental_reviews: true

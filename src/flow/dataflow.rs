@@ -373,9 +373,6 @@ impl TaintTags {
             return Some(self.clone());
         }
         if contains_any_tag(sanitizer_tags) {
-            if contains_any_tag(&self.values) {
-                return None;
-            }
             return None;
         }
         if contains_any_tag(&self.values) {

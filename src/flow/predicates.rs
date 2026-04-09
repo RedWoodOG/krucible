@@ -99,24 +99,8 @@ pub enum FlowSanitizerSpecInput {
     },
 }
 
-pub fn generic_security() -> FlowPredicateSet {
-    FlowPredicateSet::generic_security()
-}
-
-pub fn web_api() -> FlowPredicateSet {
-    FlowPredicateSet::web_api()
-}
-
-pub fn generic_security_policy() -> FlowPredicateSet {
-    FlowPredicateSet::generic_security()
-}
-
-pub fn web_api_policy() -> FlowPredicateSet {
-    FlowPredicateSet::web_api()
-}
-
 pub fn default_policies() -> Vec<FlowPredicateSet> {
-    vec![generic_security_policy(), web_api_policy()]
+    vec![FlowPredicateSet::generic_security(), FlowPredicateSet::web_api()]
 }
 
 pub fn load_policies(repo_root: &Path, explicit_model_path: Option<&Path>) -> Result<Vec<FlowPredicateSet>> {

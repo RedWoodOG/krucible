@@ -63,19 +63,38 @@ fn is_action_like_name(name: &str) -> bool {
 
 fn classify_call_kind(name: &str) -> IrCallKind {
     let lower = name.to_lowercase();
-    if matches_any(&lower, &["fetch", "axios", "request", "reqwest", "http", "post", "get", "put", "delete", "patch"]) {
+    if has_identifier_token(&lower, "fetch")
+        || has_identifier_token(&lower, "axios")
+        || has_identifier_token(&lower, "request")
+        || has_identifier_token(&lower, "reqwest")
+        || has_identifier_token(&lower, "http")
+        || ["get", "post", "put", "delete", "patch"].iter().any(|v| has_identifier_token(&lower, v))
+    {
         return IrCallKind::Network;
     }
-    if matches_any(&lower, &["query", "execute", "insert", "save", "prisma", "sequelize", "mongoose", "knex", "sql", "db", "pool", "transaction"]) {
+    if matches_any(&lower, &[
+        "query", "execute", "insert", "save", "prisma", "sequelize", "mongoose", "knex", "sql",
+        "db", "pool", "transaction",
+    ]) {
         return IrCallKind::Persistence;
     }
     if matches_any(&lower, &["read", "write", "open", "file", "fs", "path"]) {
         return IrCallKind::Io;
     }
-    if matches_any(&lower, &["verify", "bcrypt", "jwt", "token", "hash", "auth", "permission", "role", "decode"]) {
+    if matches_any(&lower, &[
+        "verify", "bcrypt", "jwt", "token", "hash", "auth", "permission", "role", "decode",
+    ]) {
         return IrCallKind::Auth;
     }
-    if matches_any(&lower, &["mail", "email", "smtp", "notify", "sendgrid", "mailgun", "ses", "notification"]) {
+    if has_identifier_token(&lower, "mail")
+        || has_identifier_token(&lower, "email")
+        || has_identifier_token(&lower, "smtp")
+        || has_identifier_token(&lower, "notify")
+        || has_identifier_token(&lower, "sendgrid")
+        || has_identifier_token(&lower, "mailgun")
+        || has_identifier_token(&lower, "ses")
+        || has_identifier_token(&lower, "notification")
+    {
         return IrCallKind::Notification;
     }
     if lower == "then" {
@@ -89,4 +108,11 @@ fn classify_call_kind(name: &str) -> IrCallKind {
 
 fn matches_any(name: &str, patterns: &[&str]) -> bool {
     patterns.iter().any(|p| name.contains(p))
+}
+
+/// Match `needle` as a whole identifier token (split on non-alphanumeric), avoiding
+/// substring false positives like `put` in `input` or `ses` in `session`.
+fn has_identifier_token(name: &str, needle: &str) -> bool {
+    name.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|part| part == needle)
 }

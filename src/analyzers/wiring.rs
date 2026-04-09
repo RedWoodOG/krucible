@@ -47,8 +47,12 @@ pub fn analyze_ir(repo: &IrRepo) -> Vec<Issue> {
             continue;
         }
 
-        // Rust #[test] functions are framework entry points and not called directly.
-        if def.attributes.iter().any(|attr| attr.contains("test")) {
+        // Rust #[test] / #[tokio::test] functions are framework entry points.
+        if def
+            .attributes
+            .iter()
+            .any(|attr| is_rust_test_attribute(attr))
+        {
             continue;
         }
 
@@ -85,3 +89,11 @@ pub fn analyze_ir(repo: &IrRepo) -> Vec<Issue> {
 
     issues
 }
+
+fn is_rust_test_attribute(attr: &str) -> bool {
+    let t = attr.trim();
+    t.starts_with("#[test]")
+        || t.starts_with("#[test(")
+        || t.contains("::test]")
+}
+
