@@ -231,21 +231,26 @@ pub fn analyze_ir(repo: &IrRepo, policies: &[FlowPredicateSet]) -> Vec<Issue> {
             } else {
                 String::new()
             };
+            let tag_hint = if hit.sink_tags.is_empty() {
+                String::new()
+            } else {
+                format!(" [taint tags: {}]", hit.sink_tags.join(","))
+            };
             issues.push(Issue {
                 issue_type: IssueType::ContractViolation,
                 severity: Severity::Medium,
                 file: hit.sink_file.clone(),
                 line: hit.sink_line.or(Some(function_cfg.start_line)),
                 message: format!(
-                    "Sensitive sink `{}` reachable from `{}` without guard{}",
-                    hit.sink_name, function_cfg.function_name, location_hint
+                    "Sensitive sink `{}` reachable from `{}` without guard{}{}",
+                    hit.sink_name, function_cfg.function_name, location_hint, tag_hint
                 ),
                 claim: Some(format!(
                     "`{}` appears security-sensitive and should enforce validation/authorization before sink calls",
                     function_cfg.function_name
                 )),
                 reality: Some(
-                    "A sink is reachable from function entry without encountering guard/sanitizer calls across bounded call flow".into(),
+                    "A sink is reachable from function entry without encountering effective guards or strong sanitizers for the active taint tags across bounded call flow".into(),
                 ),
             });
         }

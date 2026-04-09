@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::cfg::{CfgNode, CfgNodeKind, CfgRepo, FunctionCfg, NodeId};
-use super::predicates::FlowPredicateSet;
+use super::predicates::{FlowPredicateSet, SanitizerStrength, TAINT_TAG_ANY};
 use crate::ir::symbols::{ResolutionConfidence, SymbolTable};
 
 #[derive(Debug, Clone)]
@@ -298,6 +298,8 @@ pub struct InterproceduralGuardedSinkHit {
     pub sink_file: String,
     pub sink_function: String,
     pub call_depth: usize,
+    pub taint_tags: Vec<String>,
+    pub sink_tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -350,6 +352,59 @@ impl CallTargetIndex {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TaintTags {
+    values: Vec<String>,
+}
+
+impl TaintTags {
+    fn any() -> Self {
+        Self {
+            values: vec![TAINT_TAG_ANY.to_string()],
+        }
+    }
+
+    fn from_values(values: Vec<String>) -> Option<Self> {
+        let normalized = normalize_taint_tags(values);
+        if normalized.is_empty() {
+            return None;
+        }
+        Some(Self { values: normalized })
+    }
+
+    fn intersects(&self, tags: &[String]) -> bool {
+        tags_intersect(&self.values, tags)
+    }
+
+    fn apply_strong_sanitizer(&self, sanitizer_tags: &[String]) -> Option<Self> {
+        if sanitizer_tags.is_empty() {
+            return Some(self.clone());
+        }
+        if contains_any_tag(sanitizer_tags) {
+            if contains_any_tag(&self.values) {
+                return None;
+            }
+            return None;
+        }
+        if contains_any_tag(&self.values) {
+            // Unknown/any taint cannot be proven clean by tag-specific sanitizers.
+            return Some(self.clone());
+        }
+
+        let cleaned: Vec<String> = self
+            .values
+            .iter()
+            .filter(|tag| !sanitizer_tags.contains(tag))
+            .cloned()
+            .collect();
+        TaintTags::from_values(cleaned)
+    }
+
+    fn as_slice(&self) -> &[String] {
+        &self.values
+    }
+}
+
 pub fn build_dataflow_graphs(cfg_repo: &CfgRepo) -> Vec<DataflowGraph<'_>> {
     cfg_repo.functions.iter().map(DataflowGraph::new).collect()
 }
@@ -393,27 +448,30 @@ pub fn sinks_reachable_without_guards_interprocedural(
         })
         .collect();
 
-    let start_nodes: Vec<NodeId> = if source_names.is_empty() {
+    let start_nodes: Vec<(NodeId, TaintTags)> = if source_names.is_empty() {
         cfg_repo.functions[start_idx]
             .nodes
             .iter()
             .filter(|n| matches!(n.kind, CfgNodeKind::Entry))
-            .map(|n| n.id)
+            .map(|n| (n.id, TaintTags::any()))
             .collect()
     } else {
         cfg_repo.functions[start_idx]
             .nodes
             .iter()
-            .filter(|n| match &n.kind {
+            .filter_map(|n| match &n.kind {
                 CfgNodeKind::Call { name } => {
-                    source_names.iter().any(|source| {
-                        let source = source.to_lowercase();
-                        name.to_lowercase().contains(source.as_str())
-                    }) || profile.is_source(name)
+                    let mut tags = profile.source_tags_for_call(name);
+                    if match_any_substr_name(source_names, name) {
+                        tags.push(TAINT_TAG_ANY.to_string());
+                    }
+                    let Some(taint_tags) = TaintTags::from_values(tags) else {
+                        return None;
+                    };
+                    Some((n.id, taint_tags))
                 }
-                _ => false,
+                _ => None,
             })
-            .map(|n| n.id)
             .collect()
     };
 
@@ -421,19 +479,21 @@ pub fn sinks_reachable_without_guards_interprocedural(
         return Vec::new();
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct TraversalState {
         function_idx: usize,
         node_id: NodeId,
         depth: usize,
+        taint_tags: TaintTags,
     }
 
     let mut queue: VecDeque<TraversalState> = start_nodes
         .into_iter()
-        .map(|node_id| TraversalState {
+        .map(|(node_id, taint_tags)| TraversalState {
             function_idx: start_idx,
             node_id,
             depth: 0,
+            taint_tags,
         })
         .collect();
     let mut visited: HashSet<TraversalState> = HashSet::new();
@@ -450,18 +510,37 @@ pub fn sinks_reachable_without_guards_interprocedural(
             continue;
         };
 
+        let mut effective_tags = state.taint_tags.clone();
         if let CfgNodeKind::Call { name } = &node.kind {
             if profile.is_guard(name) {
                 continue;
             }
 
-            if profile.is_sink(name) && seen_sinks.insert((state.function_idx, state.node_id)) {
+            if let Some((strength, sanitizer_tags)) =
+                best_sanitizer_effect(profile, name, &effective_tags)
+            {
+                if strength == SanitizerStrength::Strong {
+                    let Some(cleaned) = effective_tags.apply_strong_sanitizer(&sanitizer_tags)
+                    else {
+                        continue;
+                    };
+                    effective_tags = cleaned;
+                }
+            }
+
+            let sink_tags = profile.sink_tags_for_call(name);
+            if !sink_tags.is_empty()
+                && effective_tags.intersects(&sink_tags)
+                && seen_sinks.insert((state.function_idx, state.node_id))
+            {
                 hits.push(InterproceduralGuardedSinkHit {
                     sink_name: name.clone(),
                     sink_line: node.line,
                     sink_file: function.file.clone(),
                     sink_function: function.function_name.clone(),
                     call_depth: state.depth,
+                    taint_tags: effective_tags.as_slice().to_vec(),
+                    sink_tags: intersect_taint_tags(effective_tags.as_slice(), &sink_tags),
                 });
             }
 
@@ -493,6 +572,7 @@ pub fn sinks_reachable_without_guards_interprocedural(
                             function_idx: callee_idx,
                             node_id: entry_node.id,
                             depth: state.depth + 1,
+                            taint_tags: effective_tags.clone(),
                         });
                     }
                 }
@@ -520,6 +600,7 @@ pub fn sinks_reachable_without_guards_interprocedural(
                     function_idx: state.function_idx,
                     node_id: *next,
                     depth: state.depth,
+                    taint_tags: effective_tags.clone(),
                 });
             }
         }
@@ -528,10 +609,95 @@ pub fn sinks_reachable_without_guards_interprocedural(
     hits
 }
 
+fn best_sanitizer_effect(
+    profile: &FlowPredicateSet,
+    call_name: &str,
+    taint_tags: &TaintTags,
+) -> Option<(SanitizerStrength, Vec<String>)> {
+    let mut best_strength: Option<SanitizerStrength> = None;
+    let mut best_tags: Vec<String> = Vec::new();
+
+    for sanitizer in profile.matching_sanitizers_for_call(call_name) {
+        if !taint_tags.intersects(&sanitizer.tags) {
+            continue;
+        }
+        match best_strength {
+            None => {
+                best_strength = Some(sanitizer.strength);
+                best_tags = sanitizer.tags.clone();
+            }
+            Some(existing) if sanitizer.strength > existing => {
+                best_strength = Some(sanitizer.strength);
+                best_tags = sanitizer.tags.clone();
+            }
+            Some(existing) if sanitizer.strength == existing => {
+                best_tags.extend(sanitizer.tags.clone());
+                best_tags = normalize_taint_tags(best_tags);
+            }
+            _ => {}
+        }
+    }
+
+    best_strength.map(|strength| (strength, normalize_taint_tags(best_tags)))
+}
+
+fn normalize_taint_tags(values: Vec<String>) -> Vec<String> {
+    let mut tags: Vec<String> = values
+        .into_iter()
+        .map(|tag| tag.trim().to_lowercase())
+        .filter(|tag| !tag.is_empty())
+        .collect();
+    tags.sort();
+    tags.dedup();
+    tags
+}
+
+fn contains_any_tag(tags: &[String]) -> bool {
+    tags.iter().any(|tag| tag == TAINT_TAG_ANY)
+}
+
+fn tags_intersect(left: &[String], right: &[String]) -> bool {
+    if left.is_empty() || right.is_empty() {
+        return false;
+    }
+    if contains_any_tag(left) || contains_any_tag(right) {
+        return true;
+    }
+    left.iter().any(|tag| right.contains(tag))
+}
+
+fn intersect_taint_tags(left: &[String], right: &[String]) -> Vec<String> {
+    if left.is_empty() || right.is_empty() {
+        return Vec::new();
+    }
+    if contains_any_tag(left) && contains_any_tag(right) {
+        return vec![TAINT_TAG_ANY.to_string()];
+    }
+    if contains_any_tag(left) {
+        return normalize_taint_tags(right.to_vec());
+    }
+    if contains_any_tag(right) {
+        return normalize_taint_tags(left.to_vec());
+    }
+    normalize_taint_tags(
+        left.iter()
+            .filter(|tag| right.contains(tag))
+            .cloned()
+            .collect(),
+    )
+}
+
+fn match_any_substr_name(patterns: &[&str], value: &str) -> bool {
+    let value = value.to_lowercase();
+    patterns
+        .iter()
+        .any(|pattern| value.contains(pattern.to_lowercase().as_str()))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::flow::cfg::build_cfg_repo;
-    use crate::flow::predicates::FlowPredicateSet;
+    use crate::flow::predicates::{parse_model_json, FlowPredicateSet};
     use crate::ir::model::{
         IrCall, IrCallKind, IrFile, IrFunction, IrLanguage, IrRepo, IrVisibility,
     };
@@ -705,6 +871,27 @@ mod tests {
         }
     }
 
+    fn typed_policy_with_sanitizer(strength: &str) -> FlowPredicateSet {
+        let raw = format!(
+            r#"
+            {{
+              "profiles": {{
+                "typed": {{
+                  "source_models": [{{ "pattern": "request", "tags": ["pii"] }}],
+                  "sink_models": [{{ "pattern": "execute", "tags": ["pii"] }}],
+                  "sanitizer_models": [
+                    {{ "pattern": "mask", "tags": ["pii"], "strength": "{strength}" }}
+                  ],
+                  "sensitive_functions": ["admin"]
+                }}
+              }}
+            }}"#
+        );
+        let file = parse_model_json(&raw).expect("typed model should parse");
+        let profile = file.profiles.get("typed").expect("typed profile should exist");
+        FlowPredicateSet::from_model("typed".into(), profile.clone())
+    }
+
     #[test]
     fn interprocedural_query_reaches_sink_in_callee() {
         let repo = interprocedural_repo(false);
@@ -867,5 +1054,159 @@ mod tests {
             Some(&call_targets),
         );
         assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn typed_tags_require_source_sink_compatibility() {
+        let raw = r#"
+        {
+          "profiles": {
+            "typed": {
+              "source_models": [{ "pattern": "request", "tags": ["pii"] }],
+              "sink_models": [{ "pattern": "execute", "tags": ["payment"] }],
+              "sensitive_functions": ["admin"]
+            }
+          }
+        }"#;
+        let file = parse_model_json(raw).expect("typed model should parse");
+        let profile = file.profiles.get("typed").expect("typed profile should exist");
+        let policy = FlowPredicateSet::from_model("typed".into(), profile.clone());
+
+        let repo = IrRepo {
+            files: vec![IrFile {
+                path: "typed.ts".into(),
+                language: IrLanguage::TypeScript,
+                functions: vec![IrFunction {
+                    name: "adminCheckout".into(),
+                    file: "typed.ts".into(),
+                    start_line: 1,
+                    end_line: 20,
+                    visibility: IrVisibility::Private,
+                    is_async: true,
+                    is_action_like: true,
+                    attributes: vec![],
+                }],
+                calls: vec![
+                    IrCall {
+                        name: "requestBody".into(),
+                        file: "typed.ts".into(),
+                        line: 2,
+                        kind: IrCallKind::Other,
+                    },
+                    IrCall {
+                        name: "execute".into(),
+                        file: "typed.ts".into(),
+                        line: 3,
+                        kind: IrCallKind::Persistence,
+                    },
+                ],
+                imports: vec![],
+            }],
+        };
+
+        let cfg_repo = build_cfg_repo(&repo);
+        let start = &cfg_repo.functions[0];
+        let hits =
+            sinks_reachable_without_guards_interprocedural(&cfg_repo, start, &["request"], &policy, 1, None);
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn strong_sanitizer_cleans_matching_taint_tags() {
+        let policy = typed_policy_with_sanitizer("strong");
+        let repo = IrRepo {
+            files: vec![IrFile {
+                path: "typed.ts".into(),
+                language: IrLanguage::TypeScript,
+                functions: vec![IrFunction {
+                    name: "adminCheckout".into(),
+                    file: "typed.ts".into(),
+                    start_line: 1,
+                    end_line: 20,
+                    visibility: IrVisibility::Private,
+                    is_async: true,
+                    is_action_like: true,
+                    attributes: vec![],
+                }],
+                calls: vec![
+                    IrCall {
+                        name: "requestBody".into(),
+                        file: "typed.ts".into(),
+                        line: 2,
+                        kind: IrCallKind::Other,
+                    },
+                    IrCall {
+                        name: "maskPii".into(),
+                        file: "typed.ts".into(),
+                        line: 3,
+                        kind: IrCallKind::Other,
+                    },
+                    IrCall {
+                        name: "execute".into(),
+                        file: "typed.ts".into(),
+                        line: 4,
+                        kind: IrCallKind::Persistence,
+                    },
+                ],
+                imports: vec![],
+            }],
+        };
+
+        let cfg_repo = build_cfg_repo(&repo);
+        let start = &cfg_repo.functions[0];
+        let hits =
+            sinks_reachable_without_guards_interprocedural(&cfg_repo, start, &["request"], &policy, 1, None);
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn weak_sanitizer_does_not_clean_matching_taint_tags() {
+        let policy = typed_policy_with_sanitizer("weak");
+        let repo = IrRepo {
+            files: vec![IrFile {
+                path: "typed.ts".into(),
+                language: IrLanguage::TypeScript,
+                functions: vec![IrFunction {
+                    name: "adminCheckout".into(),
+                    file: "typed.ts".into(),
+                    start_line: 1,
+                    end_line: 20,
+                    visibility: IrVisibility::Private,
+                    is_async: true,
+                    is_action_like: true,
+                    attributes: vec![],
+                }],
+                calls: vec![
+                    IrCall {
+                        name: "requestBody".into(),
+                        file: "typed.ts".into(),
+                        line: 2,
+                        kind: IrCallKind::Other,
+                    },
+                    IrCall {
+                        name: "maskPii".into(),
+                        file: "typed.ts".into(),
+                        line: 3,
+                        kind: IrCallKind::Other,
+                    },
+                    IrCall {
+                        name: "execute".into(),
+                        file: "typed.ts".into(),
+                        line: 4,
+                        kind: IrCallKind::Persistence,
+                    },
+                ],
+                imports: vec![],
+            }],
+        };
+
+        let cfg_repo = build_cfg_repo(&repo);
+        let start = &cfg_repo.functions[0];
+        let hits =
+            sinks_reachable_without_guards_interprocedural(&cfg_repo, start, &["request"], &policy, 1, None);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].sink_name, "execute");
+        assert!(hits[0].taint_tags.contains(&"pii".to_string()));
+        assert!(hits[0].sink_tags.contains(&"pii".to_string()));
     }
 }

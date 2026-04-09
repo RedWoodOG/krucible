@@ -83,6 +83,7 @@ This roadmap defines the engineering path from the current heuristic scanner to 
 
 ### Story 4.1: Source/sink/sanitizer model
 - Description: Define taint primitives per language/framework.
+- Status: In Progress (flow model now supports typed `source_models` / `sink_models` taint tags and `sanitizer_models` with weak/strong strength semantics; interprocedural guarded-sink traversal consumes these tags)
 - Acceptance criteria:
   - Configurable model files for sources/sinks/sanitizers.
   - Runtime supports custom model overrides.

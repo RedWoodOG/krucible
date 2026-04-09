@@ -48,14 +48,33 @@ krucible ./path/to/repo --max-high 0 --max-medium 5 --max-low 20
   "profiles": {
     "custom_profile": {
       "sources": ["request", "body"],
+      "source_models": [
+        { "pattern": "request", "tags": ["pii"] },
+        { "pattern": "payload", "tags": ["payment"] }
+      ],
       "sinks": ["execute", "invoke"],
+      "sink_models": [
+        { "pattern": "execute", "tags": ["pii"] },
+        { "pattern": "charge", "tags": ["payment"] }
+      ],
       "guards": ["validate", "authorize"],
       "sanitizers": ["escape", "sanitize"],
+      "sanitizer_models": [
+        { "pattern": "mask", "tags": ["pii"], "strength": "strong" },
+        { "pattern": "normalize", "tags": ["payment"], "strength": "weak" }
+      ],
       "sensitive_functions": ["admin", "payment", "auth"]
     }
   }
 }
 ```
+
+- Typed model notes:
+  - `source_models` / `sink_models` tags define taint categories (e.g. `pii`, `payment`).
+  - `sanitizer_models` supports `strength: "strong" | "weak"`.
+    - `strong` sanitizers clear matching taint tags.
+    - `weak` sanitizers annotate intent but do not clear taint in guarded-sink checks.
+  - Legacy string lists (`sources`, `sinks`, `sanitizers`) are still supported and treated as wildcard-tag (`*`) models.
 
 ## Supported Languages (v1)
 
