@@ -3,5 +3,5 @@
 reviews:
   auto_review:
     enabled: true
-    auto_incremental_review: true
+    incremental_reviews: true
     drafts: true
