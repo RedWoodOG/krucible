@@ -95,5 +95,5 @@ fn is_rust_test_attribute(attr: &str) -> bool {
     t.starts_with("#[test]")
         || t.starts_with("#[test(")
         || t.contains("::test]")
+        || t.contains("::test(")
 }
-
