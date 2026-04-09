@@ -99,27 +99,17 @@ pub enum FlowSanitizerSpecInput {
     },
 }
 
-pub fn generic_security() -> FlowPredicateSet {
-    FlowPredicateSet::generic_security()
-}
-
-pub fn web_api() -> FlowPredicateSet {
-    FlowPredicateSet::web_api()
-}
-
-pub fn generic_security_policy() -> FlowPredicateSet {
-    FlowPredicateSet::generic_security()
-}
-
-pub fn web_api_policy() -> FlowPredicateSet {
-    FlowPredicateSet::web_api()
-}
-
 pub fn default_policies() -> Vec<FlowPredicateSet> {
-    vec![generic_security_policy(), web_api_policy()]
+    vec![
+        FlowPredicateSet::generic_security(),
+        FlowPredicateSet::web_api(),
+    ]
 }
 
-pub fn load_policies(repo_root: &Path, explicit_model_path: Option<&Path>) -> Result<Vec<FlowPredicateSet>> {
+pub fn load_policies(
+    repo_root: &Path,
+    explicit_model_path: Option<&Path>,
+) -> Result<Vec<FlowPredicateSet>> {
     let selected_path = explicit_model_path
         .map(PathBuf::from)
         .or_else(|| discover_default_model_path(repo_root));
@@ -151,10 +141,7 @@ pub fn load_policies_from_file(path: &Path) -> Result<Vec<FlowPredicateSet>> {
         .collect();
 
     if policies.is_empty() {
-        anyhow::bail!(
-            "Flow model file '{}' contains no profiles",
-            path.display()
-        );
+        anyhow::bail!("Flow model file '{}' contains no profiles", path.display());
     }
 
     Ok(policies)
@@ -429,7 +416,10 @@ fn normalize_source_models(models: Vec<FlowSourceModel>) -> Vec<FlowSourceModel>
         if model.pattern.is_empty() {
             continue;
         }
-        by_pattern.entry(model.pattern).or_default().extend(model.tags);
+        by_pattern
+            .entry(model.pattern)
+            .or_default()
+            .extend(model.tags);
     }
 
     let mut out: Vec<FlowSourceModel> = by_pattern
@@ -449,7 +439,10 @@ fn normalize_sink_models(models: Vec<FlowSinkModel>) -> Vec<FlowSinkModel> {
         if model.pattern.is_empty() {
             continue;
         }
-        by_pattern.entry(model.pattern).or_default().extend(model.tags);
+        by_pattern
+            .entry(model.pattern)
+            .or_default()
+            .extend(model.tags);
     }
 
     let mut out: Vec<FlowSinkModel> = by_pattern
@@ -556,7 +549,9 @@ mod tests {
         assert_eq!(sanitizers.len(), 1);
         assert_eq!(sanitizers[0].strength, SanitizerStrength::Strong);
         assert!(set.is_sensitive_function("adminDeleteUser"));
-        assert!(set.source_tags_for_call("payload_writer").contains(&"pii".to_string()));
+        assert!(set
+            .source_tags_for_call("payload_writer")
+            .contains(&"pii".to_string()));
         assert!(set
             .sink_tags_for_call("db_execute")
             .contains(&TAINT_TAG_ANY.to_string()));
