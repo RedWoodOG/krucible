@@ -359,15 +359,15 @@ fn build_source_models(
         pattern: pattern.trim().to_lowercase(),
         tags: vec![TAINT_TAG_ANY.to_string()],
     }));
-    out.extend(typed_sources.iter().filter_map(|spec| match spec {
-        FlowPatternSpecInput::Name(pattern) => Some(FlowSourceModel {
+    out.extend(typed_sources.iter().map(|spec| match spec {
+        FlowPatternSpecInput::Name(pattern) => FlowSourceModel {
             pattern: pattern.trim().to_lowercase(),
             tags: vec![TAINT_TAG_ANY.to_string()],
-        }),
-        FlowPatternSpecInput::Tagged { pattern, tags } => Some(FlowSourceModel {
+        },
+        FlowPatternSpecInput::Tagged { pattern, tags } => FlowSourceModel {
             pattern: pattern.trim().to_lowercase(),
             tags: normalize_tags(tags.clone()),
-        }),
+        },
     }));
     normalize_source_models(out)
 }
@@ -381,15 +381,15 @@ fn build_sink_models(
         pattern: pattern.trim().to_lowercase(),
         tags: vec![TAINT_TAG_ANY.to_string()],
     }));
-    out.extend(typed_sinks.iter().filter_map(|spec| match spec {
-        FlowPatternSpecInput::Name(pattern) => Some(FlowSinkModel {
+    out.extend(typed_sinks.iter().map(|spec| match spec {
+        FlowPatternSpecInput::Name(pattern) => FlowSinkModel {
             pattern: pattern.trim().to_lowercase(),
             tags: vec![TAINT_TAG_ANY.to_string()],
-        }),
-        FlowPatternSpecInput::Tagged { pattern, tags } => Some(FlowSinkModel {
+        },
+        FlowPatternSpecInput::Tagged { pattern, tags } => FlowSinkModel {
             pattern: pattern.trim().to_lowercase(),
             tags: normalize_tags(tags.clone()),
-        }),
+        },
     }));
     normalize_sink_models(out)
 }
@@ -404,21 +404,21 @@ fn build_sanitizer_models(
         tags: vec![TAINT_TAG_ANY.to_string()],
         strength: SanitizerStrength::Strong,
     }));
-    out.extend(typed_sanitizers.iter().filter_map(|spec| match spec {
-        FlowSanitizerSpecInput::Name(pattern) => Some(FlowSanitizerModel {
+    out.extend(typed_sanitizers.iter().map(|spec| match spec {
+        FlowSanitizerSpecInput::Name(pattern) => FlowSanitizerModel {
             pattern: pattern.trim().to_lowercase(),
             tags: vec![TAINT_TAG_ANY.to_string()],
             strength: SanitizerStrength::Strong,
-        }),
+        },
         FlowSanitizerSpecInput::Typed {
             pattern,
             tags,
             strength,
-        } => Some(FlowSanitizerModel {
+        } => FlowSanitizerModel {
             pattern: pattern.trim().to_lowercase(),
             tags: normalize_tags(tags.clone()),
             strength: *strength,
-        }),
+        },
     }));
     normalize_sanitizer_models(out)
 }

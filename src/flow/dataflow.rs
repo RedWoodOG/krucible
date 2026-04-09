@@ -364,14 +364,6 @@ impl TaintTags {
         }
     }
 
-    fn from_values(values: Vec<String>) -> Option<Self> {
-        let normalized = normalize_taint_tags(values);
-        if normalized.is_empty() {
-            return None;
-        }
-        Some(Self { values: normalized })
-    }
-
     fn intersects(&self, tags: &[String]) -> bool {
         tags_intersect(&self.values, tags)
     }
@@ -397,7 +389,11 @@ impl TaintTags {
             .filter(|tag| !sanitizer_tags.contains(tag))
             .cloned()
             .collect();
-        TaintTags::from_values(cleaned)
+        if cleaned.is_empty() {
+            None
+        } else {
+            Some(Self { values: cleaned })
+        }
     }
 
     fn as_slice(&self) -> &[String] {
@@ -462,12 +458,14 @@ pub fn sinks_reachable_without_guards_interprocedural(
             .filter_map(|n| match &n.kind {
                 CfgNodeKind::Call { name } => {
                     let mut tags = profile.source_tags_for_call(name);
-                    if match_any_substr_name(source_names, name) {
+                    if tags.is_empty() && match_any_substr_name(source_names, name) {
                         tags.push(TAINT_TAG_ANY.to_string());
                     }
-                    let Some(taint_tags) = TaintTags::from_values(tags) else {
+                    let tags = normalize_taint_tags(tags);
+                    if tags.is_empty() {
                         return None;
-                    };
+                    }
+                    let taint_tags = TaintTags { values: tags };
                     Some((n.id, taint_tags))
                 }
                 _ => None,
@@ -501,7 +499,7 @@ pub fn sinks_reachable_without_guards_interprocedural(
     let mut seen_sinks: HashSet<(usize, NodeId)> = HashSet::new();
 
     while let Some(state) = queue.pop_front() {
-        if !visited.insert(state) {
+        if !visited.insert(state.clone()) {
             continue;
         }
 
