@@ -47,6 +47,10 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     flow_model: Option<PathBuf>,
 
+    /// Do not run cargo check / npx tsc for compiler diagnostics
+    #[arg(long, default_value_t = false)]
+    skip_compiler_diagnostics: bool,
+
     /// Maximum allowed HIGH findings before non-zero exit
     #[arg(long, value_name = "N")]
     max_high: Option<usize>,
@@ -78,6 +82,7 @@ fn main() -> anyhow::Result<()> {
     let opts = AuditOptions {
         deep: cli.deep,
         flow_model_path: cli.flow_model.clone(),
+        skip_compiler_diagnostics: cli.skip_compiler_diagnostics,
     };
     if let Some(path) = &cli.flow_model {
         if !path.exists() {
@@ -173,17 +178,13 @@ fn load_baseline_fingerprints(path: &std::path::Path) -> anyhow::Result<HashSet<
         }
     }
 
-    // SARIF format: runs[].results[].partial_fingerprints.primary_location_line_hash
+    // SARIF: partialFingerprints.primaryLocationLineHash (or legacy snake_case)
     if let Some(runs) = parsed.get("runs").and_then(|v| v.as_array()) {
         recognized = true;
         for run in runs {
             if let Some(results) = run.get("results").and_then(|v| v.as_array()) {
                 for result in results {
-                    if let Some(fp) = result
-                        .get("partial_fingerprints")
-                        .and_then(|p| p.get("primary_location_line_hash"))
-                        .and_then(|v| v.as_str())
-                    {
+                    if let Some(fp) = sarif_partial_fingerprint(result) {
                         out.insert(fp.to_string());
                     }
                 }
@@ -199,4 +200,13 @@ fn load_baseline_fingerprints(path: &std::path::Path) -> anyhow::Result<HashSet<
     }
 
     Ok(out)
+}
+
+fn sarif_partial_fingerprint(result: &serde_json::Value) -> Option<&str> {
+    let pf = result
+        .get("partialFingerprints")
+        .or_else(|| result.get("partial_fingerprints"))?;
+    pf.get("primaryLocationLineHash")
+        .or_else(|| pf.get("primary_location_line_hash"))
+        .and_then(|v| v.as_str())
 }

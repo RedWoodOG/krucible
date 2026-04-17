@@ -14,6 +14,8 @@ pub struct AuditOptions {
     pub deep: bool,
     /// Optional path to custom flow model profile JSON
     pub flow_model_path: Option<std::path::PathBuf>,
+    /// Skip `cargo check` / `npx tsc` diagnostics (useful in CI without full toolchain).
+    pub skip_compiler_diagnostics: bool,
 }
 
 pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
@@ -73,8 +75,10 @@ pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
     report.issues.append(&mut tauri_issues);
 
     // 7. Compiler diagnostics: rustc/cargo check and tsc findings.
-    let mut compiler_issues = diagnostics::analyze(repo_path);
-    report.issues.append(&mut compiler_issues);
+    if !opts.skip_compiler_diagnostics {
+        let mut compiler_issues = diagnostics::analyze(repo_path);
+        report.issues.append(&mut compiler_issues);
+    }
 
     // --- LLM-powered deep analysis (--deep flag) ---
     if opts.deep {

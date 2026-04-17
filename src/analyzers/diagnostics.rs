@@ -24,7 +24,11 @@ fn run_cargo_check(repo_path: &Path) -> Vec<Issue> {
         .output();
 
     let Ok(output) = output else {
-        return Vec::new();
+        return vec![spawn_failed_issue(
+            repo_path,
+            "cargo",
+            "Cargo.toml present but `cargo check` could not be executed (is the Rust toolchain installed and on PATH?)",
+        )];
     };
 
     let mut issues = parse_cargo_json_messages(repo_path, &output.stdout);
@@ -64,7 +68,11 @@ fn run_tsc(repo_path: &Path) -> Vec<Issue> {
         .output();
 
     let Ok(output) = output else {
-        return Vec::new();
+        return vec![spawn_failed_issue(
+            repo_path,
+            "npx tsc",
+            "tsconfig.json present but `npx tsc` could not be executed (is Node.js/npm on PATH?)",
+        )];
     };
 
     let mut issues = parse_tsc_text_output(repo_path, &output.stdout, &output.stderr);
@@ -213,6 +221,20 @@ fn parse_tsc_line(path_and_pos: &str, rhs: &str) -> Option<(PathBuf, usize, Stri
     let code = rhs_parts.next()?.trim().to_string();
     let msg = rhs_parts.next().unwrap_or("").trim().to_string();
     Some((file, line_no, code, msg))
+}
+
+fn spawn_failed_issue(repo_path: &Path, command: &str, message: &str) -> Issue {
+    Issue {
+        issue_type: IssueType::CompilerDiagnostic,
+        severity: Severity::Low,
+        file: repo_path.display().to_string(),
+        line: None,
+        message: message.to_string(),
+        claim: Some(format!("`{command}` can be run for compiler diagnostics")),
+        reality: Some(
+            "Process spawn failed — install the toolchain or pass --skip-compiler-diagnostics to skip this phase.".into(),
+        ),
+    }
 }
 
 fn normalize_path(repo_path: &Path, path: &Path) -> String {
