@@ -18,6 +18,8 @@ pub struct FunctionDef {
     pub name: String,
     pub file: String,
     pub line: usize,
+    pub end_line: usize,
+    pub is_async: bool,
     pub kind: FunctionKind,
     /// Raw attributes on this function (e.g. ["tauri::command", "allow(dead_code)"])
     pub attributes: Vec<String>,
@@ -211,6 +213,8 @@ fn extract_functions_recursive(
                         name,
                         file: file.to_string(),
                         line: node_line(node),
+                        end_line: node.end_position().row + 1,
+                        is_async: node_text(node, content).contains("async"),
                         kind: FunctionKind::Plain,
                         attributes: vec![],
                     });
@@ -241,6 +245,8 @@ fn extract_functions_recursive(
                             name,
                             file: file.to_string(),
                             line: node_line(node),
+                            end_line: node.end_position().row + 1,
+                            is_async: node_text(node, content).contains("async"),
                             kind: fn_kind,
                             attributes: attrs,
                         });
@@ -285,6 +291,26 @@ fn extract_calls_recursive(node: Node, content: &[u8], file: &str, acc: &mut Vec
                 }
                 _ => node_text(f, content).to_string(),
             };
+            if !name.is_empty() {
+                acc.push(CallSite {
+                    name,
+                    file: file.to_string(),
+                    line: node_line(node),
+                });
+            }
+        }
+    }
+    // Rust macro invocations (e.g. format!, println!, json!) are also executable call-like sites.
+    // Treating them as calls reduces false "empty stub" findings in Rust functions.
+    else if node.kind() == "macro_invocation" {
+        let text = node_text(node, content);
+        if let Some(raw) = text.split('!').next() {
+            let name = raw
+                .split("::")
+                .last()
+                .unwrap_or(raw)
+                .trim()
+                .to_string();
             if !name.is_empty() {
                 acc.push(CallSite {
                     name,

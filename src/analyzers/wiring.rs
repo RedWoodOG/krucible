@@ -1,21 +1,24 @@
-use std::collections::HashSet;
-use crate::parser::tree_sitter::{ParsedFile, FunctionKind};
+use crate::ir::builder as ir_builder;
+use crate::ir::model::{IrRepo, IrVisibility};
+use crate::ir::symbols::{ResolutionConfidence, SymbolTable};
+use crate::parser::tree_sitter::ParsedFile;
 use crate::report::schema::{Issue, IssueType, Severity};
 
 /// Cross-reference all function definitions against all call sites.
 /// Any function defined but never called anywhere = dead code / fake wiring.
 pub fn analyze(files: &[ParsedFile]) -> Vec<Issue> {
+    let repo = ir_builder::from_parsed_files(files);
+    analyze_ir(&repo)
+}
+
+/// IR-backed wiring analyzer.
+/// This is the first analyzer migrated to the normalized IR layer.
+pub fn analyze_ir(repo: &IrRepo) -> Vec<Issue> {
     let mut issues = Vec::new();
 
-    // Collect all function names defined across the entire repo
-    let all_defs: Vec<_> = files.iter()
-        .flat_map(|f| f.functions.iter())
-        .collect();
-
-    // Collect all call site names across the entire repo
-    let all_calls: HashSet<String> = files.iter()
-        .flat_map(|f| f.calls.iter().map(|c| c.name.clone()))
-        .collect();
+    // Collect all function definitions across the entire repo
+    let all_defs: Vec<_> = repo.all_functions().collect();
+    let symbol_table = SymbolTable::from_repo(repo);
 
     // Skip these — common entry points / lifecycle functions that are called by runtime
     let ignored = [
@@ -27,6 +30,8 @@ pub fn analyze(files: &[ParsedFile]) -> Vec<Issue> {
         // Express/common
         "listen", "use", "get", "post", "put", "delete", "patch",
         "on", "emit", "connect", "close",
+        // Internal helper constructors/emitters used by serialization paths.
+        "sarif_rule",
     ];
 
     for def in &all_defs {
@@ -42,18 +47,39 @@ pub fn analyze(files: &[ParsedFile]) -> Vec<Issue> {
             continue;
         }
 
-        // Tauri commands are invoked by the Tauri runtime, not by Rust call sites.
-        // Never flag them as dead code — that's the Tauri analyzer's job.
-        if def.kind == FunctionKind::TauriCommand {
+        // Rust #[test] / #[tokio::test] functions are framework entry points.
+        if def
+            .attributes
+            .iter()
+            .any(|attr| is_rust_test_attribute(attr))
+        {
             continue;
         }
 
-        if !all_calls.contains(name) {
+        // Public functions may be entry points for external callers/framework runtime.
+        // Tauri commands are invoked by runtime, not Rust call sites.
+        if matches!(def.visibility, IrVisibility::Public | IrVisibility::RuntimeExposed) {
+            continue;
+        }
+
+        let has_reference = symbol_table.has_confident_reference(
+            name,
+            &def.file,
+            def.start_line,
+            ResolutionConfidence::High,
+        ) || symbol_table.has_confident_reference(
+            name,
+            &def.file,
+            def.start_line,
+            ResolutionConfidence::Medium,
+        );
+
+        if !has_reference {
             issues.push(Issue {
                 issue_type: IssueType::DeadCode,
                 severity: Severity::Medium,
                 file: def.file.clone(),
-                line: Some(def.line),
+                line: Some(def.start_line),
                 message: format!("Function defined but never called: `{name}()`"),
                 claim: Some(format!("`{name}` is defined as a callable function")),
                 reality: Some("No call site found anywhere in the repo".into()),
@@ -63,3 +89,11 @@ pub fn analyze(files: &[ParsedFile]) -> Vec<Issue> {
 
     issues
 }
+
+fn is_rust_test_attribute(attr: &str) -> bool {
+    let t = attr.trim();
+    t.starts_with("#[test]")
+        || t.starts_with("#[test(")
+        || t.contains("::test]")
+}
+

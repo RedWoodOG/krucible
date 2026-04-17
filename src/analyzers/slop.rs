@@ -56,7 +56,19 @@ pub fn analyze(files: &[SourceFile]) -> Vec<Issue> {
         .collect();
 
     for file in files {
+        let is_slop_rs = file
+            .path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case("slop.rs"));
         for (line_num, line) in file.content.lines().enumerate() {
+            // Avoid matching this detector's own regex declarations in slop.rs only.
+            if is_slop_rs
+                && (line.contains("pattern: r\"")
+                    || line.contains(concat!("Regex::new(r", "\"")))
+            {
+                continue;
+            }
             for (re, severity, msg) in &compiled {
                 if re.is_match(line) {
                     issues.push(Issue {

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use regex::Regex;
-use crate::parser::tree_sitter::{ParsedFile, FunctionKind};
+use crate::parser::tree_sitter::ParsedFile;
 use crate::report::schema::{Issue, IssueType, Severity};
 
 /// Tauri-specific wiring analysis.
@@ -8,7 +8,6 @@ use crate::report::schema::{Issue, IssueType, Severity};
 /// Rules:
 /// 1. Only #[tauri::command] annotated functions are Tauri commands — pub fn alone is not enough
 /// 2. A #[tauri::command] function not in generate_handler! = unreachable from frontend
-/// 3. Public action-named fn without #[tauri::command] in a Tauri module = potential confusion
 pub fn analyze(files: &[ParsedFile], source_map: &std::collections::HashMap<String, String>) -> Vec<Issue> {
     let mut issues = Vec::new();
 
@@ -65,39 +64,6 @@ pub fn analyze(files: &[ParsedFile], source_map: &std::collections::HashMap<Stri
                 claim: Some(format!("`{}` is registered and available to frontend", cmd.name)),
                 reality: Some(format!("No invoke(\"{}\", ...) call found in TS/JS files", cmd.name)),
             });
-        }
-    }
-
-    // Check 3: pub action-named fn in Tauri files without annotation
-    // Flag as LOW — clarification issue, not a bug, but confusing
-    for file in files {
-        if file.tauri_commands().is_empty() {
-            continue;
-        }
-
-        let action_prefixes = [
-            "get_", "set_", "create_", "update_", "delete_", "fetch_",
-            "save_", "load_", "send_", "process_", "handle_",
-        ];
-
-        for func in &file.functions {
-            if func.kind == FunctionKind::Public && !func.is_tauri_command() {
-                let name_lower = func.name.to_lowercase();
-                if action_prefixes.iter().any(|p| name_lower.starts_with(p)) {
-                    issues.push(Issue {
-                        issue_type: IssueType::FakeWiring,
-                        severity: Severity::Low,
-                        file: func.file.clone(),
-                        line: Some(func.line),
-                        message: format!(
-                            "`{}` is public but missing #[tauri::command] — not callable from frontend",
-                            func.name
-                        ),
-                        claim: Some(format!("`{}` is public and action-named", func.name)),
-                        reality: Some("No #[tauri::command] annotation — Tauri runtime will not expose this".into()),
-                    });
-                }
-            }
         }
     }
 

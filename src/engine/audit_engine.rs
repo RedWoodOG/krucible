@@ -1,20 +1,21 @@
-use anyhow::Result;
-use std::path::Path;
-use std::collections::HashMap;
-use crate::scanner::file_loader;
+use crate::analyzers::{contracts, diagnostics, execution, llm, slop, tauri, wiring};
+use crate::flow::{cfg, dataflow, predicates};
+use crate::ir::builder as ir_builder;
 use crate::parser::tree_sitter as ts_parser;
-use crate::analyzers::{wiring, slop, contracts, execution, llm, tauri};
 use crate::report::schema::AuditReport;
+use crate::scanner::file_loader;
+use anyhow::Result;
+use std::collections::HashMap;
+use std::path::Path;
 
+#[derive(Default)]
 pub struct AuditOptions {
     /// Enable LLM-powered deep analysis (requires LiteLLM proxy on localhost:4000)
     pub deep: bool,
-}
-
-impl Default for AuditOptions {
-    fn default() -> Self {
-        Self { deep: false }
-    }
+    /// Optional path to custom flow model profile JSON
+    pub flow_model_path: Option<std::path::PathBuf>,
+    /// Skip `cargo check` / `npx tsc` diagnostics (useful in CI without full toolchain).
+    pub skip_compiler_diagnostics: bool,
 }
 
 pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
@@ -36,16 +37,21 @@ pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
         .collect();
 
     // Phase 2: Parse
-    let parsed: Vec<_> = source_files.iter()
+    let parsed: Vec<_> = source_files
+        .iter()
         .filter_map(|f| ts_parser::parse_file(f).ok())
         .collect();
+    let ir_repo = ir_builder::from_parsed_files(&parsed);
+    let cfg_repo = cfg::build_cfg_repo(&ir_repo);
+    let _dataflow_repo = dataflow::build_dataflow_graphs(&cfg_repo);
+    let flow_policies = predicates::load_policies(repo_path, opts.flow_model_path.as_deref())?;
 
     let mut report = AuditReport::new(&repo_str, file_count);
 
     // --- Static analyzers (always run) ---
 
     // 1. Wiring: dead code, unused functions
-    let mut wiring_issues = wiring::analyze(&parsed);
+    let mut wiring_issues = wiring::analyze_ir(&ir_repo);
     report.issues.append(&mut wiring_issues);
 
     // 2. Slop: TODOs, mocks, stubs, temp fixes
@@ -53,20 +59,26 @@ pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
     report.issues.append(&mut slop_issues);
 
     // 3. Contracts: heuristic Reality Gap
-    let mut contract_issues = contracts::analyze(&parsed);
+    let mut contract_issues = contracts::analyze(&ir_repo);
     report.issues.append(&mut contract_issues);
 
     // 4. Empty action stubs
-    let mut stub_issues = contracts::analyze_empty_stubs(&parsed);
+    let mut stub_issues = contracts::analyze_empty_stubs(&ir_repo);
     report.issues.append(&mut stub_issues);
 
     // 5. Execution integrity: async without await, unhandled promises
-    let mut exec_issues = execution::analyze(&source_files);
+    let mut exec_issues = execution::analyze(&source_files, &ir_repo, &flow_policies);
     report.issues.append(&mut exec_issues);
 
     // 6. Tauri command wiring: annotation vs registration vs frontend invocation
     let mut tauri_issues = tauri::analyze(&parsed, &source_map);
     report.issues.append(&mut tauri_issues);
+
+    // 7. Compiler diagnostics: rustc/cargo check and tsc findings.
+    if !opts.skip_compiler_diagnostics {
+        let mut compiler_issues = diagnostics::analyze(repo_path);
+        report.issues.append(&mut compiler_issues);
+    }
 
     // --- LLM-powered deep analysis (--deep flag) ---
     if opts.deep {
@@ -77,14 +89,22 @@ pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
 
         // Only deduplicate against existing CONTRACT violations (same type) — not dead code
         // LLM findings are a different insight even if the line overlaps
-        let existing_contract_keys: std::collections::HashSet<(String, usize)> = report.issues
+        let existing_contract_keys: std::collections::HashSet<(String, usize)> = report
+            .issues
             .iter()
-            .filter(|i| matches!(i.issue_type, crate::report::schema::IssueType::ContractViolation))
+            .filter(|i| {
+                matches!(
+                    i.issue_type,
+                    crate::report::schema::IssueType::ContractViolation
+                )
+            })
             .filter_map(|i| i.line.map(|l| (i.file.clone(), l)))
             .collect();
 
         llm_issues.retain(|i| {
-            !i.line.map(|l| existing_contract_keys.contains(&(i.file.clone(), l))).unwrap_or(false)
+            !i.line
+                .map(|l| existing_contract_keys.contains(&(i.file.clone(), l)))
+                .unwrap_or(false)
         });
 
         let count = llm_issues.len();
@@ -109,9 +129,9 @@ pub fn run_audit(repo_path: &Path, opts: AuditOptions) -> Result<AuditReport> {
     });
 
     // Deduplicate: same file + line + message
-    report.issues.dedup_by(|a, b| {
-        a.file == b.file && a.line == b.line && a.message == b.message
-    });
+    report
+        .issues
+        .dedup_by(|a, b| a.file == b.file && a.line == b.line && a.message == b.message);
 
     Ok(report)
 }
